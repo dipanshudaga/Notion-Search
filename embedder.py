@@ -4,10 +4,11 @@ MLX streams are per-thread: build the Embedder and call it from ONE thread only.
 Prompts are the model card's: queries "task: search result | query: ...", documents "title: ... | text: ...".
 """
 
+import json
 import os
 import shutil
-import threading
-import time
+import struct
+import urllib.request
 from pathlib import Path
 
 import numpy as np
@@ -16,6 +17,7 @@ DATA = Path(os.environ.get("NOTION_SEARCH_DATA", Path.home() / "Library/Applicat
 MODEL_DIR = DATA / "model"  # our own copy, so uninstall can remove it
 MODEL = "google/embeddinggemma-2"
 DIM = 768
+AUDIO = ("audio_tower.", "embed_audio.")
 QUERY_LEN = 32
 
 
@@ -27,8 +29,49 @@ def doc_prompt(title, text):
     return f"title: {title or 'none'} | text: {text}"
 
 
+def fetch_text_weights(dest, progress):
+    """Download the weights without the audio part (600 MB we do not use). We read the safetensors header, request
+    the byte ranges of every other tensor (text and image), and write them as a smaller safetensors file."""
+    from huggingface_hub import hf_hub_url
+
+    url = hf_hub_url(MODEL, "model.safetensors")
+
+    def get(start, end):  # bytes start..end inclusive
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"Range": f"bytes={start}-{end}"})) as r:
+            return r.read()
+
+    (n,) = struct.unpack("<Q", get(0, 7))
+    header = json.loads(get(8, 7 + n))
+    meta = header.pop("__metadata__", None)
+    keep = sorted((k for k in header if not k.startswith(AUDIO)), key=lambda k: header[k]["data_offsets"][0])
+    new, pos = {}, 0
+    for k in keep:
+        start, end = header[k]["data_offsets"]
+        new[k] = {**header[k], "data_offsets": [pos, pos + end - start]}
+        pos += end - start
+    blob = json.dumps(({"__metadata__": meta} if meta else {}) | new).encode()
+    blob += b" " * (-len(blob) % 8)
+    tmp = dest.with_suffix(".part")
+    with open(tmp, "wb") as f:
+        f.write(struct.pack("<Q", len(blob)) + blob)
+        done = 0
+        runs, cur = [], None  # one request per tensor is slow, so merge neighbours into runs of up to 32 MB
+        for k in keep:
+            s0, e0 = header[k]["data_offsets"]
+            if cur and s0 == cur[1] and e0 - cur[0] <= 32 * 1024 * 1024:
+                cur[1] = e0
+            else:
+                cur = [s0, e0]
+                runs.append(cur)
+        for s0, e0 in runs:
+            f.write(get(8 + n + s0, 8 + n + e0 - 1))
+            done += e0 - s0
+            progress and progress(done, pos)
+    tmp.rename(dest)
+
+
 def model_path(say=print, progress=None):
-    """Folder holding the model. Downloads it (about 1.5 GB) on the first run; progress(done, total) counts bytes."""
+    """Folder holding the model. Downloads it (about 900 MB) on the first run; progress(done, total) counts bytes."""
     if (MODEL_DIR / "model.safetensors").exists():
         say("Already on this Mac")
         return str(MODEL_DIR)
@@ -42,29 +85,9 @@ def model_path(say=print, progress=None):
         say("Copying from the Hugging Face cache")
         shutil.copytree(cached, MODEL_DIR, dirs_exist_ok=True)
     else:
-        say("Downloading about 1.5 GB (once)")
-        if not progress:
-            snapshot_download(MODEL, local_dir=MODEL_DIR)
-            return str(MODEL_DIR)
-        from huggingface_hub import HfApi
-
-        total = sum(f.size or 0 for f in HfApi().model_info(MODEL, files_metadata=True).siblings)
-        failure = []
-
-        def fetch():
-            try:
-                snapshot_download(MODEL, local_dir=MODEL_DIR)
-            except BaseException as e:
-                failure.append(e)
-
-        worker = threading.Thread(target=fetch, daemon=True)  # daemon: Ctrl+C must not wait for it
-        worker.start()
-        while worker.is_alive():
-            progress(sum(f.stat().st_size for f in MODEL_DIR.rglob("*") if f.is_file()), total)
-            time.sleep(0.5)
-        if failure:
-            raise failure[0]
-        progress(total, total)
+        say("Downloading about 900 MB (once)")
+        snapshot_download(MODEL, local_dir=MODEL_DIR, ignore_patterns=["model.safetensors"])  # tokenizer, config
+        fetch_text_weights(MODEL_DIR / "model.safetensors", progress)
     return str(MODEL_DIR)
 
 

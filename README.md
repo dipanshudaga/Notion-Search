@@ -15,11 +15,11 @@ curl -fsSL https://raw.githubusercontent.com/dipanshudaga/Notion-Search/main/ins
 The first run takes 5 to 10 minutes and works through four numbered steps:
 
 1. Sets up a private Python 3.12 environment. It uses your Python 3.12 if you have one and fetches one (through `uv`) if you do not. Git, Homebrew and Xcode are not required.
-2. Downloads the EmbeddingGemma 2 model from Hugging Face (about 1.5 GB, once, no account needed). It is stored in the app's own folder.
+2. Downloads the EmbeddingGemma 2 model from Hugging Face (about 900 MB, once, no account needed). The audio part of the model, which this app does not use, is skipped. The model is stored in the app's own folder.
 3. Reads your pages from Notion's local database and builds the search index.
 4. Registers a background service that starts at every login.
 
-Plan for about 3 GB of free disk space. When the output says "Background service started", you are done.
+Plan for about 2 GB of free disk space. When the output says "Background service started", you are done.
 
 ## Using it
 
@@ -71,11 +71,11 @@ The same actions work as commands: `notion-search status`, `restart`, `reindex`,
 
 ## Uninstall
 
-Run `notion-search`, choose Uninstall, then **Service** to keep the index and model or **Everything** to also delete the index, the 1.5 GB model and the Python environment (about 2.5 GB freed). Notion itself is never modified, so it behaves exactly as before.
+Run `notion-search`, choose Uninstall, then **Service** to keep the index and model or **Everything** to also delete the index, the 900 MB model and the Python environment (about 1.7 GB freed). Notion itself is never modified, so it behaves exactly as before.
 
 ## Privacy and security
 
-- Everything runs locally. No page text, query or telemetry is sent anywhere. The only download is the model, once.
+- Everything runs locally. No page text, query or telemetry is sent anywhere. The only download is the model (about 900 MB), once.
 - Notion's database is opened read-only, and Notion's app files are never touched, so its code signature stays intact.
 - The service talks to Notion over Chromium's DevTools port (127.0.0.1:9222). That port is reachable by any process running as you on this Mac, so do not use this on a Mac that other people control.
 

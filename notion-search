@@ -133,7 +133,7 @@ do_reindex() { [[ -f "$PLIST" ]] || { die "Not installed."; return 1; }
 do_uninstall() {
   stop; rm -f "$PLIST" "$LINK"; ok "Service removed (Notion itself was never modified)"
   if [[ "${1:-}" == "--purge" ]]; then
-    rm -rf "$DATA" "$LOG" "$DIR/.venv"; ok "Index, model (1.5 GB), log and Python environment deleted"
+    rm -rf "$DATA" "$LOG" "$DIR/.venv"; ok "Index, model (0.9 GB), log and Python environment deleted"
     
   else echo "  ${D}Kept the index and Python environment: install again anytime.${N}"; fi
 }
@@ -179,7 +179,7 @@ menu() {
     case $CHOICE in
       0) do_install;; 1) do_status;; 2) do_restart;; 3) do_reindex;;
       4) pick "Service|Remove the service only; keep the index and model" \
-              "Everything|Also delete the index, model and Python environment (frees about 2.5 GB)" \
+              "Everything|Also delete the index, model and Python environment (frees about 1.7 GB)" \
               "Cancel|Go back" && header &&
          case $CHOICE in 0) do_uninstall;; 1) do_uninstall --purge;; *) continue;; esac;;
       5) break;;
