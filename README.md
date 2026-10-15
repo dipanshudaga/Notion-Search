@@ -16,7 +16,7 @@ Notion Search makes the search box in Notion Desktop faster. It finds pages by e
 - Notion Desktop, in the Applications folder.
 - About 1 GB of free disk space.
 
-The install command checks the rest. It installs Python 3.12 if Homebrew is on your Mac. If Git is missing, it opens the window for Apple's command line tools. This is a small download. You do not need the full Xcode app.
+The install command gets everything else. It uses Python 3.12 if your Mac has it. If not, it fetches Python 3.12 for you. It does not need Git, Homebrew or Xcode.
 
 ## How to install
 
@@ -29,8 +29,6 @@ curl -fsSL https://raw.githubusercontent.com/dipanshudaga/Notion-Search/main/ins
 
 3. Wait. The first install takes 5 to 10 minutes. It installs the tools, downloads the language model (about 300 MB), and reads your pages.
 4. When you see "Background service started", the install is complete.
-
-If the command stops and asks for Git or Python, install what it names. Then run the same command again.
 
 The language model comes from Hugging Face. If Terminal says the download failed, do these steps:
 

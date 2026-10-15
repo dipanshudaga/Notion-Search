@@ -28,21 +28,30 @@ state_line() {
   else echo "${Y}○ installed, not running${N}"; fi
 }
 
+make_venv() {
+  local deps=("mlx==0.32.3" "transformers==5.19.0" "huggingface-hub>=1.33" "numpy>=2.5" websockets
+              # mlx-vlm: EmbeddingGemma 2 support is on its main branch, not on PyPI yet (the commit DigUp pins).
+              "mlx-vlm @ https://github.com/Blaizzy/mlx-vlm/archive/fec3f50379bb2cb0760ef3c8a68ebce9585e4d97.zip")
+  local py312; py312="$(command -v python3.12 || true)"
+  rm -rf "$DIR/.venv"
+  if [[ -n "$py312" ]]; then
+    step "Setting up Python environment (a few minutes, once)"
+    "$py312" -m venv "$DIR/.venv" && "$PY" -m pip install -q --upgrade pip && "$PY" -m pip install -q "${deps[@]}"
+  else
+    step "Python 3.12 not found: fetching it with uv (a few minutes, once)"
+    export PATH="$HOME/.local/bin:$PATH"
+    command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | UV_NO_MODIFY_PATH=1 sh >/dev/null || return 1
+    uv venv -q --python 3.12 "$DIR/.venv" && uv pip install -q --python "$PY" "${deps[@]}"
+  fi
+}
+
 do_install() {
   [[ "$(uname -s)-$(uname -m)" == "Darwin-arm64" ]] || { die "Needs a Mac with Apple Silicon (MLX)."; return 1; }
   [[ -d /Applications/Notion.app ]] || { die "Install Notion Desktop first (/Applications/Notion.app)."; return 1; }
-  local py312; py312="$(command -v python3.12 || true)"
-  [[ -n "$py312" ]] || { die "Needs Python 3.12:  brew install python@3.12"; return 1; }
-  command -v git >/dev/null || { die "Needs git:  xcode-select --install"; return 1; }
-
   stop; pkill -f notion_service.py 2>/dev/null || true
-  if [[ ! -x "$PY" ]] || ! "$PY" -c "import mlx_vlm, websockets" 2>/dev/null; then
-    step "Setting up Python environment (a few minutes, once)"
-    rm -rf "$DIR/.venv" && "$py312" -m venv "$DIR/.venv" || return 1
-    "$PY" -m pip install -q --upgrade pip
-    # mlx-vlm: EmbeddingGemma 2 support is on its main branch, not on PyPI yet (the commit DigUp pins).
-    "$PY" -m pip install -q "mlx==0.32.3" "transformers==5.19.0" "huggingface-hub>=1.33" "numpy>=2.5" websockets \
-      "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@fec3f50379bb2cb0760ef3c8a68ebce9585e4d97" || return 1
+  # Rebuild when missing, broken, or an old environment that carries PyTorch (unused, +300 MB in memory).
+  if [[ ! -x "$PY" ]] || ! "$PY" -c "import mlx_vlm, websockets" 2>/dev/null || "$PY" -c "import torch" 2>/dev/null; then
+    make_venv || return 1
   fi
   ok "Python environment"
 
