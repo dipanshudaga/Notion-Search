@@ -1,14 +1,17 @@
 # Notion Search
 
-Notion Search makes the search box in Notion Desktop faster. It finds pages by exact words and by meaning. It works offline. Your notes stay on your Mac.
+Notion's own search often misses what you look for. It matches exact words only. It can skip text inside pages and database rows. Its ranking is often poor.
+
+Notion Search fixes this. It adds a better search to the same Cmd+K box. It finds pages by exact words and by meaning. It works offline. Your notes stay on your Mac.
 
 ## What you get
 
-- You press **Cmd+K** in Notion, as before. The results come from your Mac, not from the internet.
-- A search takes about 0.03 seconds.
-- The search reads all the text on all your pages. This includes long pages and table cells.
-- You can search by meaning. For example, "what to pack for a trip" finds your packing list.
+- You press **Cmd+K** in Notion, as before.
+- The search finds words anywhere on a page. This includes long pages and table cells.
+- The search finds pages by meaning. For example, "what to pack for a trip" finds your packing list.
+- Pages that match all your words come first.
 - The search finds new and changed pages by itself. You do not run any command to update it.
+- The results come from your Mac, not from the internet.
 
 ## What you need
 
