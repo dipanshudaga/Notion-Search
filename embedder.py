@@ -33,6 +33,7 @@ def model_path():
 class Embedder:
     def __init__(self):
         import mlx.core as mx
+        import mlx.nn as nn
         from mlx_vlm.embedding_loader import load_embedding_model
         from mlx_vlm.utils import load_config
         from transformers import AutoTokenizer
@@ -43,7 +44,9 @@ class Embedder:
         self.mx = mx
         self.model = load_embedding_model(Path(path), config=config)
         self.tokenizer = AutoTokenizer.from_pretrained(path)
+        nn.quantize(self.model, group_size=128, bits=8)  # 8-bit weights: 546 -> 280 MB, vectors differ by <0.0005 cosine
         mx.eval(self.model.parameters())
+        mx.clear_cache()  # the freed bf16 weights would otherwise stay cached on the GPU
         mx.set_cache_limit(512 * 1024 * 1024)
         self.embed(["warm up"] * 2, max_length=QUERY_LEN, fixed=True)  # compile Metal kernels now
         self.version = f"mlx-{mx.__version__}"
