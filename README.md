@@ -14,9 +14,9 @@ Notion Search makes the search box in Notion Desktop faster. It finds pages by e
 
 - A Mac with an Apple Silicon chip (M1, M2, M3 or newer).
 - Notion Desktop, in the Applications folder.
-- Python 3.12. To install it, run `brew install python@3.12` in Terminal. This needs [Homebrew](https://brew.sh).
-- Git. If you do not have it, run `xcode-select --install` in Terminal.
 - About 1 GB of free disk space.
+
+The install command checks the rest. It installs Python 3.12 if Homebrew is on your Mac. If Git is missing, it opens the window for Apple's command line tools. This is a small download. You do not need the full Xcode app.
 
 ## How to install
 
@@ -24,23 +24,19 @@ Notion Search makes the search box in Notion Desktop faster. It finds pages by e
 2. Copy this command into Terminal. Press Enter.
 
 ```bash
-git clone https://github.com/dipanshudaga/Notion-Search.git
+curl -fsSL https://raw.githubusercontent.com/dipanshudaga/Notion-Search/main/install.sh | bash
 ```
 
-3. Copy this command into Terminal. Press Enter.
+3. Wait. The first install takes 5 to 10 minutes. It installs the tools, downloads the language model (about 300 MB), and reads your pages.
+4. When you see "Background service started", the install is complete.
 
-```bash
-cd Notion-Search && ./notion-search install
-```
-
-4. Wait. The first install takes 5 to 10 minutes. It installs the tools, downloads the language model (about 300 MB), and reads your pages.
-5. When you see "Background service started", the install is complete.
+If the command stops and asks for Git or Python, install what it names. Then run the same command again.
 
 The language model comes from Hugging Face. If Terminal says the download failed, do these steps:
 
 1. Open [huggingface.co/google/embeddinggemma-2](https://huggingface.co/google/embeddinggemma-2). Accept the licence.
-2. Run `.venv/bin/hf auth login` in Terminal. Follow the steps on the screen.
-3. Run `./notion-search install` again.
+2. Run `~/.notion-search/.venv/bin/hf auth login` in Terminal. Follow the steps on the screen.
+3. Run the install command again.
 
 ## How to use
 
@@ -69,7 +65,7 @@ Use the arrow keys to move. Press Enter to choose. Press `q` to leave.
 | Uninstall | Removes the service. |
 | Quit | Closes the menu. |
 
-If the command `notion-search` is not found, run `./notion-search` inside the `Notion-Search` folder.
+If the command `notion-search` is not found, run `~/.notion-search/notion-search`.
 
 ## If something is wrong
 
