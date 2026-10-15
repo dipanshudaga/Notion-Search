@@ -1,0 +1,162 @@
+#!/bin/bash
+# Notion Search: control panel. Run `notion-search` for the menu, or pass a command:
+#   install | status | restart | reindex | uninstall [--purge]   (logs: for debugging)
+set -uo pipefail
+
+SRC="${BASH_SOURCE[0]}"; while [[ -L "$SRC" ]]; do SRC="$(readlink "$SRC")"; done
+DIR="$(cd "$(dirname "$SRC")" && pwd)"
+LABEL="com.notionsearch.service"
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+LOG="$HOME/Library/Logs/NotionSearch.log"
+DATA="$HOME/Library/Application Support/NotionSearch"
+LINK="$HOME/.local/bin/notion-search"
+PY="$DIR/.venv/bin/python"
+DOMAIN="gui/$(id -u)"
+
+B=$'\033[1m'; D=$'\033[2m'; C=$'\033[36m'; G=$'\033[32m'; R=$'\033[31m'; Y=$'\033[33m'; N=$'\033[0m'
+ok() { echo "  ${G}✓${N} $*"; }
+die() { echo "  ${R}✗${N} $*"; return 1; }
+step() { echo "  ${C}•${N} $*"; }
+
+pid() { launchctl print "$DOMAIN/$LABEL" 2>/dev/null | awk '/^\tpid =/{print $3}'; }
+pages() { sqlite3 "$DATA/index.db" "select count(*) from pages" 2>/dev/null || echo 0; }
+stop() { launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true; }
+
+state_line() {
+  if [[ ! -f "$PLIST" ]]; then echo "${D}○ not installed${N}"
+  elif [[ -n "$(pid)" ]]; then echo "${G}● running${N} ${D}· $(pages) pages indexed${N}"
+  else echo "${Y}○ installed, not running${N}"; fi
+}
+
+do_install() {
+  [[ "$(uname -s)-$(uname -m)" == "Darwin-arm64" ]] || { die "Needs a Mac with Apple Silicon (MLX)."; return 1; }
+  [[ -d /Applications/Notion.app ]] || { die "Install Notion Desktop first (/Applications/Notion.app)."; return 1; }
+  local py312; py312="$(command -v python3.12 || true)"
+  [[ -n "$py312" ]] || { die "Needs Python 3.12:  brew install python@3.12"; return 1; }
+  command -v git >/dev/null || { die "Needs git:  xcode-select --install"; return 1; }
+
+  stop; pkill -f notion_service.py 2>/dev/null || true
+  if [[ ! -x "$PY" ]] || ! "$PY" -c "import mlx_vlm, websockets" 2>/dev/null; then
+    step "Setting up Python environment (a few minutes, once)"
+    rm -rf "$DIR/.venv" && "$py312" -m venv "$DIR/.venv" || return 1
+    "$PY" -m pip install -q --upgrade pip
+    # mlx-vlm: EmbeddingGemma 2 support is on its main branch, not on PyPI yet (the commit DigUp pins).
+    "$PY" -m pip install -q "mlx==0.32.3" "transformers==5.19.0" "huggingface-hub>=1.33" "numpy>=2.5" websockets \
+      "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@fec3f50379bb2cb0760ef3c8a68ebce9585e4d97" || return 1
+  fi
+  ok "Python environment"
+
+  step "Reading your Notion and building the search index (first time: a few minutes)"
+  (cd "$DIR" && PYTHONWARNINGS=ignore "$PY" -u notion_service.py --index) || {
+    die "Indexing failed. If the model download was refused, accept the licence at"
+    echo "      https://huggingface.co/google/embeddinggemma-2  then run:  $DIR/.venv/bin/hf auth login"
+    return 1; }
+  ok "Index built"
+
+  mkdir -p "$(dirname "$PLIST")" "$(dirname "$LOG")" "$(dirname "$LINK")"
+  cat > "$PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>$LABEL</string>
+  <key>ProgramArguments</key><array><string>$PY</string><string>-u</string><string>$DIR/notion_service.py</string></array>
+  <key>WorkingDirectory</key><string>$DIR</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>$LOG</string>
+  <key>StandardErrorPath</key><string>$LOG</string>
+</dict></plist>
+EOF
+  launchctl bootstrap "$DOMAIN" "$PLIST" && ok "Background service started (and starts at every login)"
+  ln -sf "$DIR/notion-search" "$LINK" && ok "Command installed: notion-search"
+  case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) echo "  ${Y}!${N} add ~/.local/bin to your PATH to run it from anywhere" ;; esac
+  echo; echo "  Use Notion as usual and press Cmd+K. (If Notion was open, it restarts once.)"
+}
+
+do_status() {
+  echo "  $(state_line)"
+  if [[ -f "$PLIST" ]]; then
+    if ps -axo command= | grep -q "^/Applications/Notion.app/Contents/MacOS/Notion --remote-debugging-port"; then
+      ok "Notion is running with the search hook"
+    elif ps -axo command= | grep -q "^/Applications/Notion.app/Contents/MacOS/Notion"; then
+      echo "  ${Y}!${N} Notion is open without the hook; the service restarts it within seconds"
+    else echo "  ${D}Notion is not open${N}"; fi
+    echo; tail -n 6 "$LOG" 2>/dev/null | sed 's/^/  '"$D"'/; s/$/'"$N"'/'
+  fi
+}
+
+do_restart() { [[ -f "$PLIST" ]] || { die "Not installed."; return 1; }
+  launchctl kickstart -k "$DOMAIN/$LABEL" && ok "Restarted"; }
+
+do_reindex() { [[ -f "$PLIST" ]] || { die "Not installed."; return 1; }
+  stop; rm -f "$DATA"/index.db*
+  step "Rebuilding the index"
+  (cd "$DIR" && PYTHONWARNINGS=ignore "$PY" -u notion_service.py --index)
+  launchctl bootstrap "$DOMAIN" "$PLIST" && ok "Done, service running"; }
+
+do_uninstall() {
+  stop; rm -f "$PLIST" "$LINK"; ok "Service removed (Notion itself was never modified)"
+  if [[ "${1:-}" == "--purge" ]]; then
+    rm -rf "$DATA" "$LOG" "$DIR/.venv"; ok "Index, log and Python environment deleted"
+    echo "  ${D}The ~300 MB model stays in ~/.cache/huggingface (other tools may use it).${N}"
+  else echo "  ${D}Kept the index and Python environment: install again anytime.${N}"; fi
+}
+
+# ── menu ────────────────────────────────────────────────────────────────────
+
+header() { printf '\033[H\033[2J\n  %sNotion Search%s\n  %s\n\n' "$B" "$N" "$(state_line)"; }
+
+pick() {  # pick OPTION...  -> CHOICE = chosen index; returns 1 on q/esc
+  local opts=("$@") sel=0 key k2 i
+  tput civis 2>/dev/null
+  while true; do
+    header
+    for i in "${!opts[@]}"; do
+      local label="${opts[$i]%%|*}" desc=""; [[ "${opts[$i]}" == *"|"* ]] && desc="${opts[$i]#*|}"
+      if [[ $i -eq $sel ]]; then printf '  %s❯ %-11s%s %s%s%s\n' "$C" "$label" "$N" "$D" "$desc" "$N"
+      else printf '    %-11s %s%s%s\n' "$label" "$D" "$desc" "$N"; fi
+    done
+    printf '\n  %s↑↓ move · enter select · q quit%s\n' "$D" "$N"
+    IFS= read -rsn1 key
+    case "$key" in
+      $'\033') read -rsn2 -t 1 k2 || true
+               case "$k2" in '[A') ((sel = (sel + ${#opts[@]} - 1) % ${#opts[@]}));; '[B') ((sel = (sel + 1) % ${#opts[@]}));; *) tput cnorm 2>/dev/null; return 1;; esac;;
+      k) ((sel = (sel + ${#opts[@]} - 1) % ${#opts[@]}));;
+      j) ((sel = (sel + 1) % ${#opts[@]}));;
+      q) tput cnorm 2>/dev/null; return 1;;
+      '') CHOICE=$sel; tput cnorm 2>/dev/null; return 0;;
+    esac
+  done
+}
+
+menu() {
+  while true; do
+    local install_label="Install|Set up the search service and index your Notion"
+    [[ -f "$PLIST" ]] && install_label="Update|Reinstall the service and refresh dependencies"
+    pick "$install_label" \
+      "Status|Is it running, and is Notion hooked?" \
+      "Restart|Restart the background service" \
+      "Reindex|Re-read all your Notion pages from scratch" \
+      "Uninstall|Remove the service (your Notion is never touched)" \
+      "Quit|Close this menu" || break
+    header
+    case $CHOICE in
+      0) do_install;; 1) do_status;; 2) do_restart;; 3) do_reindex;;
+      4) pick "Service|Remove the service only; keep the index, so installing again is instant" \
+              "Everything|Remove the service, plus delete the index and Python environment" \
+              "Cancel|Go back" && header &&
+         case $CHOICE in 0) do_uninstall;; 1) do_uninstall --purge;; *) continue;; esac;;
+      5) break;;
+    esac
+    printf '\n  %sPress any key to go back%s' "$D" "$N"; read -rsn1 _
+  done
+  tput cnorm 2>/dev/null; clear
+}
+
+case "${1:-menu}" in
+  menu) if [[ -t 0 && -t 1 ]]; then menu; else sed -n 2,3p "$0"; fi ;;
+  install) do_install;; status) do_status;; restart) do_restart;; reindex) do_reindex;;
+  logs) tail -f "$LOG";; uninstall) do_uninstall "${2:-}";;
+  *) sed -n 2,3p "$0"; exit 1;;
+esac
