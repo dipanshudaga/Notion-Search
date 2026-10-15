@@ -16,7 +16,7 @@ Notion Search makes the search box in Notion Desktop faster. It finds pages by e
 - Notion Desktop, in the Applications folder.
 - About 1 GB of free disk space.
 
-The install command gets everything else. It uses Python 3.12 if your Mac has it. If not, it fetches Python 3.12 for you. It does not need Git, Homebrew or Xcode.
+The install command gets everything else. It uses Python 3.12 if your Mac has it. If not, it installs Python 3.12 for you. It does not need Git, Homebrew or Xcode.
 
 ## How to install
 
