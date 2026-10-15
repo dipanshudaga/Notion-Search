@@ -30,25 +30,102 @@ state_line() {
   else echo "${Y}○ installed, not running${N}"; fi
 }
 
-# A progress bar while pip works. pip prints one "Collecting" line per package, so those count the progress.
-bar() { # bar DONE TOTAL
-  local n=$(( 30 * $1 / $2 )) pct=$(( 100 * $1 / $2 ))
-  printf '\r  %s[%s%s]%s %3d%%' "$C" "$(printf '█%.0s' $(seq 1 $n))" "$(printf '░%.0s' $(seq 1 $((30 - n))))" "$N" "$pct"
+# ── installer UI: a live checklist, one line per step, a bar on the active one ───────────────────
+UI_TTY=0; [[ -t 1 ]] && UI_TTY=1
+UI_NAMES=(); UI_STATE=(); UI_DETAIL=(); UI_CAPTION=""; UI_DRAWN=0; UI_ACTIVE=0; UI_T0=0
+
+rep() { local out="" i; for ((i = 0; i < $2; i++)); do out+="$1"; done; printf '%s' "$out"; }
+bar_str() { # bar_str DONE TOTAL
+  local n=$(( 24 * $1 / $2 )); (( n > 24 )) && n=24
+  printf '%s%s%s%s%s %3d%%' "$C" "$(rep '━' $n)" "$D" "$(rep '─' $((24 - n)))" "$N" $(( 100 * $1 / $2 ))
 }
 
-pip_with_bar() { # pip_with_bar PIP_ARGS...
-  local log total=45 n rc; log="$(mktemp)"
+ui_draw() {
+  [[ $UI_TTY -eq 1 ]] || return 0
+  local i line name
+  (( UI_DRAWN )) && printf '\033[%dA' $(( ${#UI_NAMES[@]} + 2 ))
+  for i in "${!UI_NAMES[@]}"; do
+    printf -v name '%-24s' "${UI_NAMES[$i]}"
+    case "${UI_STATE[$i]}" in
+      done)   line="  ${G}✓${N} $name ${D}${UI_DETAIL[$i]}${N}";;
+      active) line="  ${C}●${N} ${B}$name${N} ${UI_DETAIL[$i]}";;
+      fail)   line="  ${R}✗${N} $name ${R}${UI_DETAIL[$i]}${N}";;
+      *)      line="  ${D}○ $name${N}";;
+    esac
+    printf '\033[K%s\n' "$line"
+  done
+  printf '\033[K\n\033[K  %s%s%s\n' "$D" "$UI_CAPTION" "$N"
+  UI_DRAWN=1
+}
+
+ui_init() { # ui_init STEP_NAME...
+  UI_NAMES=("$@"); UI_STATE=(); UI_DETAIL=(); UI_CAPTION=""; UI_DRAWN=0
+  local _; for _ in "$@"; do UI_STATE+=(pending); UI_DETAIL+=(""); done
+  printf '\n  %sNotion Search%s  %s· %s%s\n\n' "$B" "$N" "$D" "${UI_TITLE:-installer}" "$N"
+  ui_draw
+}
+ui_start() { UI_ACTIVE=$1; UI_STATE[$1]=active; UI_DETAIL[$1]=""; UI_T0=$SECONDS; UI_CAPTION=""
+  [[ $UI_TTY -eq 1 ]] && ui_draw || echo "  [$(($1 + 1))/${#UI_NAMES[@]}] ${UI_NAMES[$1]}..."; }
+ui_done() { UI_STATE[$1]=done; UI_DETAIL[$1]="${2:-$((SECONDS - UI_T0))s}"; UI_CAPTION=""; ui_draw; }
+ui_fail() { UI_STATE[$UI_ACTIVE]=fail; UI_DETAIL[$UI_ACTIVE]="${1:-failed}"; ui_draw; }
+ui_caption() { UI_CAPTION="$1"; ui_draw; }
+ui_bar() { # ui_bar DONE TOTAL UNIT SCALE
+  (( $2 > 0 )) || return 0
+  UI_DETAIL[$UI_ACTIVE]="$(bar_str "$1" "$2")  ${D}$(( $1 / $4 ))/$(( $2 / $4 )) $3${N}"; ui_draw
+}
+ui_spin() { # ui_spin PID LABEL: animate until the background job PID ends
+  local frames=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏) f=0 t=$SECONDS
+  while kill -0 "$1" 2>/dev/null; do
+    UI_DETAIL[$UI_ACTIVE]="${C}${frames[f % 10]}${N} ${D}$2 · $((SECONDS - t))s${N}"; ui_draw
+    f=$((f + 1)); sleep 0.12
+  done
+}
+ui_error() { # ui_error LOGFILE: show the last lines of a failed command under the checklist
+  echo; echo "  ${R}Something went wrong. Last lines:${N}"; tail -n 12 "$1" | sed 's/^/    /'
+}
+
+run_py() { # run_py ARGS...: run notion_service.py and feed its @say / @progress lines to the UI
+  local log rc; log="$(mktemp)"
+  (cd "$DIR" && NS_PROTOCOL=1 PYTHONWARNINGS=ignore "$PY" -u notion_service.py "$@" 2>&1) | while IFS= read -r line; do
+    case "$line" in
+      "@say "*) ui_caption "${line#@say }";;
+      "@progress "*) set -- ${line#@progress }; ui_bar "$1" "$2" "$3" "$4";;
+      *) printf '%s\n' "$line" >> "$log";;
+    esac
+  done
+  rc=${PIPESTATUS[0]}
+  [[ $rc -eq 0 ]] || ui_error "$log"
+  rm -f "$log"; return "$rc"
+}
+
+pip_step() { # pip_step ARGS...: pip prints a "Collecting" line per package, which counts the download phase
+  local log n last job rc; log="$(mktemp)"
   "$PY" -m pip install --progress-bar off "$@" >"$log" 2>&1 &
-  local job=$!
+  job=$!
   while kill -0 "$job" 2>/dev/null; do
-    n=$(grep -c '^Collecting' "$log"); grep -q '^Installing collected' "$log" && n=$((total - 1))
-    (( n >= total )) && n=$((total - 1)); (( n < 1 )) && n=1
-    [[ -t 1 ]] && bar "$n" "$total"
-    sleep 0.4
+    if grep -q '^Installing collected' "$log"; then ui_caption "Installing packages"; ui_spin_once "$job"
+    else
+      n=$(grep -c '^Collecting' "$log"); (( n > 55 )) && n=55; (( n < 1 )) && n=1
+      last=$(grep '^Collecting' "$log" | tail -n 1 | cut -c1-60); ui_caption "${last:-Resolving packages}"
+      ui_bar "$n" 60 packages 1; sleep 0.3
+    fi
   done
   wait "$job"; rc=$?
-  if [[ $rc -eq 0 ]]; then [[ -t 1 ]] && { bar 1 1; echo; }; else echo; tail -n 15 "$log"; fi
-  rm -f "$log"; return $rc
+  [[ $rc -eq 0 ]] || ui_error "$log"
+  rm -f "$log"; return "$rc"
+}
+ui_spin_once() { # one animated frame while pip installs packages (no percentage is knowable here)
+  local frames=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
+  UI_DETAIL[$UI_ACTIVE]="${C}${frames[$((SECONDS * 8 % 10))]}${N} ${D}almost there · $((SECONDS - UI_T0))s${N}"; ui_draw; sleep 0.12
+}
+
+quiet_step() { # quiet_step LABEL CMD...: run a command with a spinner (used for uv, which has no machine-readable progress)
+  local label="$1" log rc job; shift; log="$(mktemp)"
+  "$@" >"$log" 2>&1 & job=$!
+  ui_caption "$label"; ui_spin "$job" "$label"
+  wait "$job"; rc=$?
+  [[ $rc -eq 0 ]] || ui_error "$log"
+  rm -f "$log"; return "$rc"
 }
 
 make_venv() {
@@ -58,13 +135,14 @@ make_venv() {
   local py312; py312="$(command -v python3.12 || true)"
   rm -rf "$DIR/.venv"
   if [[ -n "$py312" ]]; then
-    step "Setting up Python environment (a few minutes, once)"
-    "$py312" -m venv "$DIR/.venv" && "$PY" -m pip install -q --upgrade pip && pip_with_bar "${deps[@]}"
+    ui_caption "Creating the environment"
+    "$py312" -m venv "$DIR/.venv" && "$PY" -m pip install -q --upgrade pip >/dev/null 2>&1 && pip_step "${deps[@]}"
   else
-    step "Python 3.12 not found: fetching it with uv (a few minutes, once)"
     export PATH="$HOME/.local/bin:$PATH"
-    command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | UV_NO_MODIFY_PATH=1 sh >/dev/null || return 1
-    uv venv --python 3.12 "$DIR/.venv" && uv pip install --python "$PY" "${deps[@]}"
+    command -v uv >/dev/null || quiet_step "Getting uv, which fetches Python 3.12" \
+      bash -c 'curl -LsSf https://astral.sh/uv/install.sh | UV_NO_MODIFY_PATH=1 sh' || return 1
+    quiet_step "Fetching Python 3.12" uv venv --python 3.12 "$DIR/.venv" || return 1
+    quiet_step "Installing packages" uv pip install --python "$PY" "${deps[@]}"
   fi
 }
 
@@ -72,22 +150,25 @@ do_install() {
   [[ "$(uname -s)-$(uname -m)" == "Darwin-arm64" ]] || { die "Needs a Mac with Apple Silicon (MLX)."; return 1; }
   [[ -d /Applications/Notion.app ]] || { die "Install Notion Desktop first (/Applications/Notion.app)."; return 1; }
   stop; pkill -f notion_service.py 2>/dev/null || true
-  step "Step 1 of 4 · Python environment"
+  UI_TITLE="installer"
+  ui_init "Python environment" "Language model" "Index your pages" "Background service"
+
+  ui_start 0
   # Rebuild when missing, broken, or an old environment that carries PyTorch (unused, +300 MB in memory).
   if [[ ! -x "$PY" ]] || ! "$PY" -c "import mlx_vlm, websockets" 2>/dev/null || "$PY" -c "import torch" 2>/dev/null; then
-    make_venv || return 1
-  else echo "  Already set up"; fi
-  ok "Python environment ready"
+    make_venv || { ui_fail; return 1; }
+    ui_done 0
+  else ui_done 0 "already set up"; fi
 
-  step "Step 2 of 4 · Language model (Google EmbeddingGemma 2)"
-  (cd "$DIR" && PYTHONWARNINGS=ignore "$PY" -u notion_service.py --download) || { die "Model download failed. Check your internet connection and run this again."; return 1; }
-  ok "Language model ready"
+  ui_start 1; ui_caption "Google EmbeddingGemma 2, downloaded from Hugging Face"
+  run_py --download || { ui_fail "download failed: check your internet"; return 1; }
+  ui_done 1
 
-  step "Step 3 of 4 · Indexing your pages"
-  (cd "$DIR" && PYTHONWARNINGS=ignore "$PY" -u notion_service.py --index) || { die "Indexing failed."; return 1; }
-  ok "Index built"
+  ui_start 2
+  run_py --index || { ui_fail; return 1; }
+  ui_done 2
 
-  step "Step 4 of 4 · Background service"
+  ui_start 3; ui_caption "Registering the service that starts at every login"
   mkdir -p "$(dirname "$PLIST")" "$(dirname "$LOG")" "$(dirname "$LINK")"
   cat > "$PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -103,10 +184,15 @@ do_install() {
   <key>StandardErrorPath</key><string>$LOG</string>
 </dict></plist>
 EOF
-  launchctl bootstrap "$DOMAIN" "$PLIST" && ok "Background service started (and starts at every login)"
-  ln -sf "$DIR/notion-search" "$LINK" && ok "Command installed: notion-search"
-  case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) echo "  ${Y}!${N} add ~/.local/bin to your PATH to run it from anywhere" ;; esac
-  echo; echo "  Use Notion as usual and press Cmd+K. (If Notion was open, it restarts once.)"
+  launchctl bootstrap "$DOMAIN" "$PLIST" || { ui_fail; return 1; }
+  ln -sf "$DIR/notion-search" "$LINK"
+  ui_done 3
+
+  echo "  ${G}${B}All set.${N} Open Notion and press ${B}Cmd+K${N}."
+  echo "  ${D}If Notion was already open, it restarts once so the search can attach.${N}"
+  echo "  ${D}Manage it any time with:${N} notion-search"
+  case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) echo "  ${Y}!${N} add ~/.local/bin to your PATH to run notion-search from anywhere" ;; esac
+  echo
 }
 
 do_status() {
@@ -126,9 +212,10 @@ do_restart() { [[ -f "$PLIST" ]] || { die "Not installed."; return 1; }
 
 do_reindex() { [[ -f "$PLIST" ]] || { die "Not installed."; return 1; }
   stop; rm -f "$DATA"/index.db*
-  step "Rebuilding the index"
-  (cd "$DIR" && PYTHONWARNINGS=ignore "$PY" -u notion_service.py --index)
-  launchctl bootstrap "$DOMAIN" "$PLIST" && ok "Done, service running"; }
+  UI_TITLE="rebuilding the index"; ui_init "Index your pages" "Background service"
+  ui_start 0; run_py --index || { ui_fail; return 1; }; ui_done 0
+  ui_start 1; launchctl bootstrap "$DOMAIN" "$PLIST" || { ui_fail; return 1; }; ui_done 1
+  echo "  ${G}${B}Done.${N} The service is running again."; echo; }
 
 do_uninstall() {
   stop; rm -f "$PLIST" "$LINK"; ok "Service removed (Notion itself was never modified)"

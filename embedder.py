@@ -76,6 +76,10 @@ def model_path(say=print, progress=None):
         say("Already on this Mac")
         return str(MODEL_DIR)
     from huggingface_hub import snapshot_download
+    from huggingface_hub.utils import disable_progress_bars, logging as hf_logging
+
+    disable_progress_bars()  # our own installer draws the progress
+    hf_logging.set_verbosity_error()  # no "unauthenticated requests" warning
 
     try:  # reuse a copy from the shared Hugging Face cache instead of downloading again
         cached = snapshot_download(MODEL, local_files_only=True)

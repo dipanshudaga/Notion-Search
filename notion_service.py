@@ -154,8 +154,17 @@ async def keep_index_fresh(engine):
             log(f"sync failed: {e!r}")
 
 
+PROTOCOL = bool(os.environ.get("NS_PROTOCOL"))  # set by the installer, which draws the progress itself
+
+
+def say(message):
+    print(f"@say {message}" if PROTOCOL else f"  {message}", flush=True)
+
+
 def bar(done, total, unit="chunks", scale=1):
     """Progress bar (a plain line per 10% when not on a terminal)."""
+    if PROTOCOL:
+        return print(f"@progress {done} {total} {unit} {scale}", flush=True)
     shown = f"{done // scale}/{total // scale} {unit}"
     if sys.stdout.isatty():
         n = 30 * done // total
@@ -170,10 +179,9 @@ async def main():
     indexing = "--index" in sys.argv
     if "--download" in sys.argv:
         from embedder import model_path
-        return model_path(lambda m: print(f"  {m}", flush=True),
-                          lambda d, t: bar(d, t, "MB", 1_000_000))
+        return model_path(say, lambda d, t: bar(d, t, "MB", 1_000_000))
     if indexing:
-        print("  Loading the model into memory...", flush=True)
+        say("Loading the model into memory")
     engine = await asyncio.get_running_loop().run_in_executor(
         EXEC, lambda: Engine(bar if indexing else None))  # builds the index on first run
     log(f"ready: {len(engine.pages)} pages, {len(engine.chunk_page)} chunks indexed")
