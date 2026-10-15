@@ -4,10 +4,16 @@ MLX streams are per-thread: build the Embedder and call it from ONE thread only.
 Prompts are the model card's: queries "task: search result | query: ...", documents "title: ... | text: ...".
 """
 
+import os
+import shutil
+import threading
+import time
 from pathlib import Path
 
 import numpy as np
 
+DATA = Path(os.environ.get("NOTION_SEARCH_DATA", Path.home() / "Library/Application Support/NotionSearch"))
+MODEL_DIR = DATA / "model"  # our own copy, so uninstall can remove it
 MODEL = "google/embeddinggemma-2"
 DIM = 768
 QUERY_LEN = 32
@@ -21,13 +27,45 @@ def doc_prompt(title, text):
     return f"title: {title or 'none'} | text: {text}"
 
 
-def model_path():
+def model_path(say=print, progress=None):
+    """Folder holding the model. Downloads it (about 1.5 GB) on the first run; progress(done, total) counts bytes."""
+    if (MODEL_DIR / "model.safetensors").exists():
+        say("Already on this Mac")
+        return str(MODEL_DIR)
     from huggingface_hub import snapshot_download
 
-    try:
-        return snapshot_download(MODEL, local_files_only=True)
+    try:  # reuse a copy from the shared Hugging Face cache instead of downloading again
+        cached = snapshot_download(MODEL, local_files_only=True)
     except Exception:
-        return snapshot_download(MODEL)  # first run only (~300 MB)
+        cached = None
+    if cached:
+        say("Copying from the Hugging Face cache")
+        shutil.copytree(cached, MODEL_DIR, dirs_exist_ok=True)
+    else:
+        say("Downloading about 1.5 GB (once)")
+        if not progress:
+            snapshot_download(MODEL, local_dir=MODEL_DIR)
+            return str(MODEL_DIR)
+        from huggingface_hub import HfApi
+
+        total = sum(f.size or 0 for f in HfApi().model_info(MODEL, files_metadata=True).siblings)
+        failure = []
+
+        def fetch():
+            try:
+                snapshot_download(MODEL, local_dir=MODEL_DIR)
+            except BaseException as e:
+                failure.append(e)
+
+        worker = threading.Thread(target=fetch, daemon=True)  # daemon: Ctrl+C must not wait for it
+        worker.start()
+        while worker.is_alive():
+            progress(sum(f.stat().st_size for f in MODEL_DIR.rglob("*") if f.is_file()), total)
+            time.sleep(0.5)
+        if failure:
+            raise failure[0]
+        progress(total, total)
+    return str(MODEL_DIR)
 
 
 class Embedder:
@@ -38,7 +76,7 @@ class Embedder:
         from mlx_vlm.utils import load_config
         from transformers import AutoTokenizer
 
-        path = model_path()
+        path = model_path(lambda m: None)
         config = load_config(path)
         config["audio_config"] = config["vision_config"] = None  # text part only
         self.mx = mx

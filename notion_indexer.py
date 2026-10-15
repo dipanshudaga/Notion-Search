@@ -11,10 +11,9 @@ import sqlite3
 from collections import namedtuple
 from pathlib import Path
 
-from embedder import MODEL, doc_prompt
+from embedder import DATA, MODEL, doc_prompt
 
 NOTION_DB = Path.home() / "Library/Application Support/Notion/notion.db"
-DATA = Path(os.environ.get("NOTION_SEARCH_DATA", Path.home() / "Library/Application Support/NotionSearch"))
 INDEX_DB = DATA / "index.db"
 FINGERPRINT = f"{MODEL} prompts1 chunks1500 len512 q8g128"  # change = every vector is recomputed on next start
 PAGE_TYPES = {"page", "collection_view_page"}

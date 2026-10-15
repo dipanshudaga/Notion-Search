@@ -5,12 +5,13 @@
   * re-indexes in the background whenever Notion's local database changes
 
 Notion's app files are never touched, so its signature (and the Keychain) stay as shipped.
-`python notion_service.py --index` builds/updates the index once and exits.
+`python notion_service.py --download` fetches the model, `--index` builds/updates the index once. Both exit when done.
 """
 
 import asyncio
 import base64
 import itertools
+import os
 import json
 import subprocess
 import sys
@@ -153,21 +154,26 @@ async def keep_index_fresh(engine):
             log(f"sync failed: {e!r}")
 
 
-def bar(done, total):
-    """Progress bar for --index (a plain line per 10% when not on a terminal)."""
+def bar(done, total, unit="chunks", scale=1):
+    """Progress bar (a plain line per 10% when not on a terminal)."""
+    shown = f"{done // scale}/{total // scale} {unit}"
     if sys.stdout.isatty():
         n = 30 * done // total
-        print(f"\r  [{'█' * n}{'░' * (30 - n)}] {100 * done // total:3d}%  {done}/{total} chunks", end="", flush=True)
+        print(f"\r  [{'█' * n}{'░' * (30 - n)}] {100 * done // total:3d}%  {shown}", end="", flush=True)
         if done == total:
             print()
-    elif done == total or done * 10 // total != (done - 16) * 10 // total:
-        print(f"indexed {done}/{total} chunks", flush=True)
+    elif done == total or done * 10 // total != (done - total // 40) * 10 // total:
+        print(f"{shown}", flush=True)
 
 
 async def main():
     indexing = "--index" in sys.argv
+    if "--download" in sys.argv:
+        from embedder import model_path
+        return model_path(lambda m: print(f"  {m}", flush=True),
+                          lambda d, t: bar(d, t, "MB", 1_000_000))
     if indexing:
-        print("  Loading the model...", flush=True)
+        print("  Loading the model into memory...", flush=True)
     engine = await asyncio.get_running_loop().run_in_executor(
         EXEC, lambda: Engine(bar if indexing else None))  # builds the index on first run
     log(f"ready: {len(engine.pages)} pages, {len(engine.chunk_page)} chunks indexed")
@@ -177,4 +183,8 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:  # the engine thread would otherwise run to the end before Python exits
+        print("\n  Stopped.", flush=True)
+        os._exit(130)

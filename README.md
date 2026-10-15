@@ -1,129 +1,131 @@
 # Notion Search
 
-Notion's own search often misses what you look for. It matches exact words only. It can skip text inside pages and database rows. Its ranking is often poor.
+Notion's built-in search often misses what you are looking for. It leans on exact words and titles, it can skip text buried inside long pages, toggles and database rows, and its ranking is hard to predict.
 
-Notion Search fixes this. It adds a better search to the same Cmd+K box. It finds pages by exact words and by meaning. It works offline. Your notes stay on your Mac.
+Notion Search keeps the same Cmd+K box and replaces what answers it. Every page in your workspace is indexed on your Mac, and each query is answered by a hybrid of exact-word search and meaning-based search. The meaning side uses Google's **EmbeddingGemma 2** model, running locally on the Apple Silicon GPU. Nothing leaves your machine, and it keeps working offline.
 
-## What you get
+## Install
 
-- You press **Cmd+K** in Notion, as before.
-- The search finds words anywhere on a page. This includes long pages and table cells.
-- The search finds pages by meaning. For example, "what to pack for a trip" finds your packing list.
-- Pages that match all your words come first.
-- The search finds new and changed pages by itself. You do not run any command to update it.
-- The results come from your Mac, not from the internet.
-
-## What you need
-
-- A Mac with an Apple Silicon chip (M1, M2, M3 or newer).
-- Notion Desktop, in the Applications folder.
-- About 1 GB of free disk space.
-
-The install command gets everything else. It uses Python 3.12 if your Mac has it. If not, it installs Python 3.12 for you. It does not need Git, Homebrew or Xcode.
-
-## How to install
-
-1. Open the **Terminal** app. Press Cmd+Space, type "Terminal", and press Enter.
-2. Copy this command into Terminal. Press Enter.
+You need a Mac with Apple Silicon (M1 or newer) and Notion Desktop in `/Applications`. Open Terminal and run:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/dipanshudaga/Notion-Search/main/install.sh | bash
 ```
 
-3. Wait. The first install takes 5 to 10 minutes. It installs the tools, downloads the language model (about 300 MB), and reads your pages.
-4. When you see "Background service started", the install is complete.
+The first run takes 5 to 10 minutes and works through four numbered steps:
 
-The language model comes from Hugging Face. If Terminal says the download failed, do these steps:
+1. Sets up a private Python 3.12 environment. It uses your Python 3.12 if you have one and fetches one (through `uv`) if you do not. Git, Homebrew and Xcode are not required.
+2. Downloads the EmbeddingGemma 2 model from Hugging Face (about 1.5 GB, once, no account needed). It is stored in the app's own folder.
+3. Reads your pages from Notion's local database and builds the search index.
+4. Registers a background service that starts at every login.
 
-1. Open [huggingface.co/google/embeddinggemma-2](https://huggingface.co/google/embeddinggemma-2). Accept the licence.
-2. Run `~/.notion-search/.venv/bin/hf auth login` in Terminal. Follow the steps on the screen.
-3. Run the install command again.
+Plan for about 3 GB of free disk space. When the output says "Background service started", you are done.
 
-## How to use
+## Using it
 
-1. Open Notion as usual.
-2. Press **Cmd+K**.
-3. Type your search.
+Open Notion and press **Cmd+K** (or Cmd+P). Nothing else changes.
 
-**Notion restarts one time.** Notion Search needs Notion to start with a special setting. If you open Notion without this setting, Notion Search closes Notion and opens it again with the setting. This takes about 5 seconds. It happens each time you open Notion from the Dock or from Spotlight. Your pages are safe. Notion saves them all the time.
+Notion has to be started with a debug port so the service can answer its search requests. If you open Notion normally, the service notices within a couple of seconds, quits it, and reopens it with the port enabled. Expect one short restart each time you launch Notion from the Dock or Spotlight. Your pages are safe, because Notion saves continuously.
+
+New and edited pages are picked up automatically, usually within 15 seconds. You never need to run an update command.
+
+## What gets searched
+
+- The full text of every page, however long, including text inside toggles, columns, lists and callouts.
+- Table cells.
+- Page titles, and the breadcrumb path of each page.
+
+Long pages are split into chunks of about 1,500 characters. Each chunk is embedded separately, so a match deep inside a long page still finds the page, and the result snippet shows the part that matched.
+
+Not indexed: database properties such as status, tags or dates, and the contents of PDFs, images and other attachments. Pages Notion Desktop has never loaded onto your Mac are not in its local database, so they cannot be indexed until Notion loads them.
+
+## How results are ranked
+
+Each query is run two ways and the results are merged.
+
+- **Exact words:** SQLite FTS5 with stemming and prefix matching. A title match counts more than a body match.
+- **Meaning:** the query is embedded and compared with every chunk. A chunk only counts when its similarity stands well above the typical score for that query (4 standard deviations), which keeps unrelated pages out and lets nonsense queries return nothing.
+
+Pages that contain all of your words are boosted, and titles that contain them are boosted again. The snippet shown under each result is cut from the place in the page where your rarest words cluster, with the matches highlighted.
 
 ## The control menu
 
-Run this command in Terminal:
-
-```bash
-notion-search
-```
-
-Use the arrow keys to move. Press Enter to choose. Press `q` to leave.
+Run `notion-search` in Terminal for an arrow-key menu:
 
 | Option | What it does |
 |---|---|
-| Update | Installs the service again and refreshes the tools. |
-| Status | Shows if the service runs and if it has a link to Notion. |
-| Restart | Restarts the background service. |
-| Reindex | Reads all your pages again from the start. |
-| Uninstall | Removes the service. |
-| Quit | Closes the menu. |
+| Update | Reinstalls the service and refreshes dependencies |
+| Status | Shows whether the service is running and Notion is hooked |
+| Restart | Restarts the background service |
+| Reindex | Rebuilds the whole index from scratch (about 2 to 3 minutes) |
+| Uninstall | Removes the service, optionally with the index, model and Python environment |
 
-If the command `notion-search` is not found, run `~/.notion-search/notion-search`.
+The same actions work as commands: `notion-search status`, `restart`, `reindex`, `uninstall [--purge]`, and `logs` for debugging. If the command is not found, run `~/.notion-search/notion-search`.
 
-## If something is wrong
+## Troubleshooting
 
-- **Search is not fast.** Run `notion-search` and choose **Status**. The service must show "running".
-- **A new page does not show in the results.** Wait 15 seconds. Notion Desktop must have the page on your Mac. Open the page one time in Notion Desktop.
-- **The results look old or wrong.** Choose **Reindex** in the menu. This takes 2 to 3 minutes.
-- **You want to see the log.** Run `notion-search logs`. Press Ctrl+C to stop.
+- **Results look slow or come from Notion's own search:** run `notion-search status`. The service must be running and Notion must be hooked.
+- **A new page does not appear:** wait about 15 seconds, and make sure Notion Desktop has opened that page at least once.
+- **Results look stale or wrong:** run Reindex from the menu.
+- **Something else:** `notion-search logs` follows `~/Library/Logs/NotionSearch.log`.
 
-## How to remove it
+## Uninstall
 
-1. Run `notion-search`.
-2. Choose **Uninstall**.
-3. Choose **Service** to keep the index. Choose **Everything** to remove the index and the tools also.
+Run `notion-search`, choose Uninstall, then **Service** to keep the index and model or **Everything** to also delete the index, the 1.5 GB model and the Python environment (about 2.5 GB freed). Notion itself is never modified, so it behaves exactly as before.
 
-Notion itself stays the same. After you uninstall, Notion works as it did before.
+## Privacy and security
 
-## Privacy
-
-- All work happens on your Mac. Notion Search sends no data to any server.
-- The only download is the language model, one time, from Hugging Face.
-- Notion Search reads the Notion database file on your Mac in read-only mode. It never writes to this file.
-- Notion Search does not change the Notion app. Notion keeps its official signature.
-
-Port 9222 on your Mac connects Notion Search to Notion. Other programs on your Mac can use this port also. Do not use Notion Search on a Mac that other people control.
+- Everything runs locally. No page text, query or telemetry is sent anywhere. The only download is the model, once.
+- Notion's database is opened read-only, and Notion's app files are never touched, so its code signature stays intact.
+- The service talks to Notion over Chromium's DevTools port (127.0.0.1:9222). That port is reachable by any process running as you on this Mac, so do not use this on a Mac that other people control.
 
 ## How it works
 
-Notion Search has three parts.
+```
+Notion Desktop ── Cmd+K ──> /api/v3/search request
+        │  (intercepted over the DevTools port)
+        ▼
+notion_service.py ──> search_engine.py ──> answer in Notion's own response format
+        │                    │
+        │                    ├─ FTS5 index   (exact words)
+        │                    └─ vectors      (EmbeddingGemma 2, MLX, 8-bit)
+        ▼
+notion_indexer.py: reads Notion's local database (read-only),
+re-embeds only the pages whose text changed
+```
 
-1. **Reader.** It reads the pages in the Notion database file on your Mac. It cuts long pages into parts of about 1,500 characters.
-2. **Index.** It keeps two lists. One list holds the words. The other list holds the meaning of each part, as numbers from the model.
-3. **Connector.** When you type in Cmd+K, Notion asks its server for results. Notion Search catches this request. It gives Notion the results from your Mac. Notion shows them as usual.
-
-The files:
-
-| File | Job |
+| File | Role |
 |---|---|
-| `notion-search` | The menu and the install commands. |
-| `notion_service.py` | The background service. It connects to Notion and keeps the index current. |
-| `search_engine.py` | The search. It joins the word results and the meaning results. |
-| `notion_indexer.py` | Reads the Notion database and builds the index. |
-| `embedder.py` | Runs the language model on the graphics chip of the Mac. |
+| `notion-search` | Menu and install, update, reindex and uninstall commands |
+| `install.sh` | One-line bootstrap that downloads the project and runs the installer |
+| `notion_service.py` | Background service: keeps Notion hooked, answers searches, keeps the index fresh |
+| `search_engine.py` | Hybrid retrieval, ranking, snippets, and Notion's response format |
+| `notion_indexer.py` | Reads the Notion database, builds pages and chunks, stores the index |
+| `embedder.py` | Runs EmbeddingGemma 2 on the GPU with the model card's prompts |
 
-The index is in `~/Library/Application Support/NotionSearch`. The log is in `~/Library/Logs/NotionSearch.log`.
+The index and the model live in `~/Library/Application Support/NotionSearch`. All model work runs on a single thread, because MLX streams are per-thread.
+
+## Performance
+
+Measured on an M2 MacBook Air with a 836-page workspace (956 chunks):
+
+- Search: about 20 to 50 ms per query, including the model call. The first query after a restart takes about 250 ms.
+- Memory: about 740 MB resident, most of it the model in 8-bit form (280 MB) and Python.
+- Full index build: 2 to 3 minutes. Later updates re-embed only changed pages and take about a second.
+- Idle: no measurable CPU, and no network traffic beyond local connections to Notion.
+
+## Limitations
+
+- Apple Silicon only (MLX).
+- Pages must be cached by Notion Desktop to be searchable.
+- Notion restarts once when it is opened without the debug port.
+- Database properties and attachment contents are not searched.
 
 ## Credits
 
-Notion Search uses ideas and tools from other people. Thank you to all of them.
+- **[DigUp](https://github.com/ARahim3/DigUp)** by ARahim3 (MIT). DigUp, which searches local files with the same model, shaped several decisions here: the model card's query and document prompts, scoring a hit against the whole score distribution for a query instead of a fixed cutoff, storing a model fingerprint in the index so a model change triggers a rebuild, and the tested `mlx-vlm` version that supports the model.
+- **[EmbeddingGemma 2](https://huggingface.co/google/embeddinggemma-2)** by Google DeepMind (Apache 2.0).
+- **[MLX](https://github.com/ml-explore/mlx)** by Apple and **[mlx-vlm](https://github.com/Blaizzy/mlx-vlm)** by Blaizzy.
+- **SQLite FTS5** for exact-word search.
 
-- **[DigUp](https://github.com/ARahim3/DigUp)** by ARahim3 (MIT licence). DigUp searches the files on your Mac with the same model. We learned from it in these ways:
-  - The exact text prompts for the model (`task: search result | query: ...`).
-  - Scoring a result against all other results for the same search, instead of a fixed cut-off.
-  - Storing a "fingerprint" of the model in the index. A change of model then rebuilds the index by itself.
-  - Running the model on one thread only.
-  - The tested version of `mlx-vlm` that supports the model.
-- **[EmbeddingGemma 2](https://huggingface.co/google/embeddinggemma-2)** by Google DeepMind (Apache 2.0). This is the model that finds results by meaning.
-- **[MLX](https://github.com/ml-explore/mlx)** by Apple and **[mlx-vlm](https://github.com/Blaizzy/mlx-vlm)** by Blaizzy. They run the model on the graphics chip of the Mac.
-- **SQLite FTS5** finds results by exact words.
-
-Notion Search is not made by, or connected to, Notion Labs, Google or Apple. Notion is a trademark of Notion Labs, Inc.
+Notion Search is not affiliated with Notion Labs, Google or Apple. Notion is a trademark of Notion Labs, Inc.
