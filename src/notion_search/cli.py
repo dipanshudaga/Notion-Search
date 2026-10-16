@@ -4,6 +4,7 @@ import importlib.metadata
 import json
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -68,6 +69,27 @@ def state_line():
 
 # ── live checklist (installer) ────────────────────────────────────────────────
 
+ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+
+
+def clip(text, width):
+    """Cut text to `width` visible characters, keeping colour codes intact. A line that wraps in a narrow window would
+    break the redraw, which moves the cursor up by a fixed number of lines."""
+    out, seen, i = [], 0, 0
+    while i < len(text):
+        code = ANSI.match(text, i)
+        if code:
+            out.append(code.group())
+            i = code.end()
+        elif seen >= width - 1:
+            return "".join(out) + "…" + N
+        else:
+            out.append(text[i])
+            seen += 1
+            i += 1
+    return "".join(out)
+
+
 def bar_str(done, total, width=24):
     n = min(width, width * done // total)
     return f"{G}{'━' * n}{D}{'─' * (width - n)}{N} {100 * done // total:3d}%"
@@ -78,6 +100,7 @@ class Checklist:
 
     def __init__(self, title, names):
         self.names, self.state, self.detail = names, ["pending"] * len(names), [""] * len(names)
+        self.pad = max(len(n) for n in names)  # one column of names, as wide as the longest
         self.caption, self.drawn, self.active, self.t0 = "", False, 0, time.time()
         out(f"\n{D}┌{N}  {B}Notion Search{N}  {D}· {title}{N}\n{RAIL}")
         self.draw()
@@ -85,14 +108,18 @@ class Checklist:
     def draw(self):
         if not TTY:
             return
+        cols = shutil.get_terminal_size().columns
         if self.drawn:
             print(f"\033[{len(self.names) + 2}A", end="")
+        below = ""  # on a narrow window the active step's bar or spinner moves to the line under the list
         for name, st, det in zip(self.names, self.state, self.detail):
-            name = f"{name:<30}"
+            name = f"{name:<{self.pad}}"
+            if st == "active" and det and len(ANSI.sub("", f"{RAIL}  ■ {name} {det}")) > cols - 1:
+                below, det = det, ""
             line = {"done": f"{G}✓{N} {name} {D}{det}{N}", "active": f"{G}■{N} {B}{name}{N} {det}",
                     "fail": f"{R}✗{N} {name} {R}{det}{N}"}.get(st, f"{D}□ {name}{N}")
-            print(f"\033[K{RAIL}  {line}")
-        print(f"\033[K{RAIL}\n\033[K{RAIL}  {D}{self.caption}{N}", flush=True)
+            print(f"\033[K{clip(f'{RAIL}  {line}', cols)}")
+        print(f"\033[K{RAIL}\n\033[K{clip(f'{RAIL}  ' + (below or f'{D}{self.caption}{N}'), cols)}", flush=True)
         self.drawn = True
 
     def start(self, i, caption=""):
@@ -113,7 +140,11 @@ class Checklist:
 
     def progress(self, done, total, unit, scale):
         if total > 0:
-            self.detail[self.active] = f"{bar_str(done, total)}  {D}{done // scale}/{total // scale} {unit}{N}"
+            counts = f"{done // scale}/{total // scale} {unit}"
+            cols = shutil.get_terminal_size().columns
+            inline = cols - (6 + self.pad + 1) - len(counts) - 8  # room beside the name: rail, marker, gaps, percent
+            width = 24 if inline >= 24 else max(6, min(24, cols - 6 - len(counts) - 8))  # else it goes under the list
+            self.detail[self.active] = f"{bar_str(done, total, width)}  {D}{counts}{N}"
             self.draw()
 
 
