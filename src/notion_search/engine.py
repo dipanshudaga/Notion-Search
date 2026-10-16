@@ -154,8 +154,6 @@ class Engine:
                 continue
             space_id = block["space_id"] or default_space
             record_map["block"][pid] = {"role": "editor", "value": block}
-            if bid:  # a hit inside the page: Notion opens the page at that block
-                record_map["block"][bid] = {"role": "editor", "value": snap.blocks[bid]}
             parent = block["parent_id"]
             if block["parent_table"] == "collection" and parent in snap.cols:
                 record_map["collection"][parent] = {"role": "editor", "value": snap.cols[parent]}
@@ -163,12 +161,18 @@ class Engine:
                 record_map["block"][parent] = {"role": "editor", "value": snap.blocks[parent]}
             if space_id in snap.spaces:
                 record_map["space"][space_id] = {"role": "editor", "value": snap.spaces[space_id]}
-            hl_title = self.highlight(snip if bid else self.pages[pid][0], terms)  # Notion titles a block hit by the block
+            hl_title = self.highlight(self.pages[pid][0], terms)
+            hl_text = self.highlight(snip, terms)
+            # highlightBlockId is how Notion's cloud tells the client which block to scroll to and highlight on open;
+            # like the cloud, send a title highlight only when the title matched, or the client skips that block
+            hits = [{"highlightedText": hl_text, "highlightBlockId": bid, "relevanceRankES": 0}] if bid else []
             results.append({
-                "id": bid or pid, "table": "block", "spaceId": space_id, "score": 1000 - len(results),
-                "sources": [], "isSurrogateCollection": False, "collectionId": None,
-                "highlight": {"title": hl_title, "text": "" if bid else self.highlight(snip, terms)},
-                "highlights": {"titleHighlight": hl_title, "textHighlights": []},  # newer shape Notion's cloud sends
+                "id": pid, "table": "block", "spaceId": space_id, "score": 1000 - len(results),
+                "sources": ["es"], "analytics": {"pageViews": {}, "uniquePageViews": {}}, "badges": [],
+                "isSurrogateCollection": False, "collectionId": None,
+                "highlight": {**({"title": hl_title} if HL_OPEN in hl_title else {}), "text": hl_text},
+                **({"highlightBlockId": bid} if bid else {}),
+                "highlights": {**({"titleHighlight": hl_title} if HL_OPEN in hl_title else {}), "textHighlights": hits},  # newer shape Notion's cloud sends
             })
         return {"results": results, "recordMap": record_map, "total": len(results), "trackEventProperties": {}}
 
