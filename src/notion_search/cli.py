@@ -1,5 +1,6 @@
 """The `notion-search` command: an arrow-key menu, plus install, status, restart, reindex, uninstall and logs."""
 
+import importlib.metadata
 import os
 import re
 import sqlite3
@@ -114,10 +115,10 @@ class Checklist:
             self.draw()
 
 
-def run_service(ui, flag):
+def run_service(ui, flag, python=None):
     """Run `python -m notion_search.service FLAG`, turning its @say / @progress lines into checklist updates."""
     env = {**os.environ, "NS_PROTOCOL": "1", "PYTHONWARNINGS": "ignore"}
-    proc = subprocess.Popen([sys.executable, "-u", "-m", "notion_search.service", flag], env=env,
+    proc = subprocess.Popen([python or sys.executable, "-u", "-m", "notion_search.service", flag], env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     other = []
     for line in proc.stdout:
@@ -140,14 +141,14 @@ def run_service(ui, flag):
 
 # ── commands ──────────────────────────────────────────────────────────────────
 
-def write_plist():
+def write_plist(python):
     PLIST.parent.mkdir(parents=True, exist_ok=True)
     LOG.parent.mkdir(parents=True, exist_ok=True)
     PLIST.write_text(f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>{LABEL}</string>
-  <key>ProgramArguments</key><array><string>{sys.executable}</string><string>-u</string><string>-m</string><string>notion_search.service</string></array>
+  <key>ProgramArguments</key><array><string>{python}</string><string>-u</string><string>-m</string><string>notion_search.service</string></array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>10</integer>
@@ -157,6 +158,38 @@ def write_plist():
 """)
 
 
+def uv_output(*args):
+    try:
+        return subprocess.run(["uv", *args], capture_output=True, text=True).stdout.strip()
+    except OSError:
+        return ""
+
+
+def running_from_uvx():
+    """True when this process runs from uv's throwaway cache (uvx), which a background service must not point at."""
+    cache = uv_output("cache", "dir")
+    return bool(cache) and sys.prefix.startswith(cache)
+
+
+def install_program(ui):
+    """Install the notion-search command permanently with `uv tool`, showing a spinner. Returns the new Python path."""
+    spec = os.environ.get("NOTION_SEARCH_SPEC") or f"notion-search=={importlib.metadata.version('notion-search')}"
+    proc = subprocess.Popen(["uv", "tool", "install", "--python", "3.12", "--force", "--quiet", spec],
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    frames, f, t = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏", 0, time.time()
+    while proc.poll() is None:
+        ui.detail[ui.active] = f"{C}{frames[f % 10]}{N} {D}installing packages · {time.time() - t:.0f}s{N}"
+        ui.draw()
+        f += 1
+        time.sleep(0.12)
+    if proc.returncode:
+        out(f"\n{RAIL}  {R}Something went wrong. Last lines:{N}")
+        for line in proc.stdout.read().splitlines()[-12:]:
+            out(f"{RAIL}    {line}")
+        return None
+    return str(Path(uv_output("tool", "dir")) / "notion-search" / "bin" / "python")
+
+
 def do_install():
     if sys.platform != "darwin" or os.uname().machine != "arm64":
         return fail("Needs a Mac with Apple Silicon (MLX).")
@@ -164,27 +197,41 @@ def do_install():
         return fail("Install Notion Desktop first (/Applications/Notion.app).")
     stop_service()
     subprocess.run(["pkill", "-f", "notion_search.service"], capture_output=True)
-    ui = Checklist("installer", ["Language model", "Index your pages", "Background service"])
+    temporary = running_from_uvx()
+    names = ["Language model", "Index your pages", "Background service"]
+    ui = Checklist("installer", (["The notion-search command"] if temporary else []) + names)
+    step, python = 0, sys.executable
 
-    ui.start(0, "Google EmbeddingGemma 2, downloaded from Hugging Face")
-    if not run_service(ui, "--download"):
+    if temporary:  # started with `uvx notion-search install`: put the command and its environment somewhere permanent
+        ui.start(step, "uv puts the program in its own environment")
+        python = install_program(ui)
+        if not python:
+            return ui.failed()
+        ui.done(step)
+        step += 1
+
+    ui.start(step, "Google EmbeddingGemma 2, downloaded from Hugging Face")
+    if not run_service(ui, "--download", python):
         return ui.failed("download failed: check your internet")
-    ui.done(0)
+    ui.done(step)
 
-    ui.start(1)
-    if not run_service(ui, "--index"):
+    ui.start(step + 1)
+    if not run_service(ui, "--index", python):
         return ui.failed()
-    ui.done(1)
+    ui.done(step + 1)
 
-    ui.start(2, "Registering the service that starts at every login")
-    write_plist()
+    ui.start(step + 2, "Registering the service that starts at every login")
+    write_plist(python)
     if launchctl("bootstrap", DOMAIN, str(PLIST)).returncode:
         return ui.failed()
-    ui.done(2)
+    ui.done(step + 2)
 
     out(f"{D}└{N}  {G}{B}All set.{N} Open Notion and press {B}Cmd+K{N}.")
     out(f"   {D}If Notion was already open, it restarts once so the search can attach.{N}")
-    out(f"   {D}Manage it any time with:{N} notion-search\n")
+    out(f"   {D}Manage it any time with:{N} notion-search")
+    if temporary and (bin_dir := uv_output("tool", "dir", "--bin")) and bin_dir not in os.environ.get("PATH", "").split(":"):
+        out(f"   {Y}!{N} To use that command, run {B}uv tool update-shell{N} and open a new Terminal window.")
+    out()
 
 
 def do_status():
