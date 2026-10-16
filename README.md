@@ -142,4 +142,8 @@ Measured on an M2 MacBook Air with a 836-page workspace (956 chunks):
 - **[MLX](https://github.com/ml-explore/mlx)** by Apple and **[mlx-vlm](https://github.com/Blaizzy/mlx-vlm)** by Blaizzy.
 - **SQLite FTS5** for exact-word search.
 
+## License
+
+MIT. See [LICENSE](LICENSE). The model it downloads, EmbeddingGemma 2, has its own licence (Apache 2.0).
+
 Notion Search is not affiliated with Notion Labs, Google or Apple. Notion is a trademark of Notion Labs, Inc.
