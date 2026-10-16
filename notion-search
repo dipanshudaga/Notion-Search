@@ -16,9 +16,9 @@ DOMAIN="gui/$(id -u)"
 trap 'printf "\n  Stopped.\n"; tput cnorm 2>/dev/null; exit 130' INT
 
 B=$'\033[1m'; D=$'\033[2m'; C=$'\033[36m'; G=$'\033[32m'; R=$'\033[31m'; Y=$'\033[33m'; N=$'\033[0m'
-ok() { echo "  ${G}✓${N} $*"; }
-die() { echo "  ${R}✗${N} $*"; return 1; }
-step() { echo "  ${C}•${N} $*"; }
+ok() { echo "${D}│${N}  ${G}✓${N} $*"; }
+die() { echo "${D}│${N}  ${R}✗${N} $*"; return 1; }
+step() { echo "${D}│${N}  ${C}•${N} $*"; }
 
 pid() { launchctl print "$DOMAIN/$LABEL" 2>/dev/null | awk '/^\tpid =/{print $3}'; }
 pages() { sqlite3 "$DATA/index.db" "select count(*) from pages" 2>/dev/null || echo 0; }
@@ -47,21 +47,21 @@ ui_draw() {
   for i in "${!UI_NAMES[@]}"; do
     printf -v name '%-24s' "${UI_NAMES[$i]}"
     case "${UI_STATE[$i]}" in
-      done)   line="  ${G}✓${N} $name ${D}${UI_DETAIL[$i]}${N}";;
-      active) line="  ${C}●${N} ${B}$name${N} ${UI_DETAIL[$i]}";;
-      fail)   line="  ${R}✗${N} $name ${R}${UI_DETAIL[$i]}${N}";;
-      *)      line="  ${D}○ $name${N}";;
+      done)   line="${D}│${N}  ${G}✓${N} $name ${D}${UI_DETAIL[$i]}${N}";;
+      active) line="${D}│${N}  ${C}●${N} ${B}$name${N} ${UI_DETAIL[$i]}";;
+      fail)   line="${D}│${N}  ${R}✗${N} $name ${R}${UI_DETAIL[$i]}${N}";;
+      *)      line="${D}│${N}  ${D}○ $name${N}";;
     esac
     printf '\033[K%s\n' "$line"
   done
-  printf '\033[K\n\033[K  %s%s%s\n' "$D" "$UI_CAPTION" "$N"
+  printf '\033[K%s│%s\n\033[K%s│%s  %s%s%s\n' "$D" "$N" "$D" "$N" "$D" "$UI_CAPTION" "$N"
   UI_DRAWN=1
 }
 
 ui_init() { # ui_init STEP_NAME...
   UI_NAMES=("$@"); UI_STATE=(); UI_DETAIL=(); UI_CAPTION=""; UI_DRAWN=0
   local _; for _ in "$@"; do UI_STATE+=(pending); UI_DETAIL+=(""); done
-  printf '\n  %sNotion Search%s  %s· %s%s\n\n' "$B" "$N" "$D" "${UI_TITLE:-installer}" "$N"
+  printf '\n%s┌%s  %sNotion Search%s  %s· %s%s\n%s│%s\n' "$D" "$N" "$B" "$N" "$D" "${UI_TITLE:-installer}" "$N" "$D" "$N"
   ui_draw
 }
 ui_start() { UI_ACTIVE=$1; UI_STATE[$1]=active; UI_DETAIL[$1]=""; UI_T0=$SECONDS; UI_CAPTION=""
@@ -81,7 +81,7 @@ ui_spin() { # ui_spin PID LABEL: animate until the background job PID ends
   done
 }
 ui_error() { # ui_error LOGFILE: show the last lines of a failed command under the checklist
-  echo; echo "  ${R}Something went wrong. Last lines:${N}"; tail -n 12 "$1" | sed 's/^/    /'
+  echo; echo "${D}│${N}  ${R}Something went wrong. Last lines:${N}"; tail -n 12 "$1" | sed "s/^/${D}│${N}    /"
 }
 
 run_py() { # run_py ARGS...: run notion_service.py and feed its @say / @progress lines to the UI
@@ -188,22 +188,22 @@ EOF
   ln -sf "$DIR/notion-search" "$LINK"
   ui_done 3
 
-  echo "  ${G}${B}All set.${N} Open Notion and press ${B}Cmd+K${N}."
-  echo "  ${D}If Notion was already open, it restarts once so the search can attach.${N}"
-  echo "  ${D}Manage it any time with:${N} notion-search"
-  case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) echo "  ${Y}!${N} add ~/.local/bin to your PATH to run notion-search from anywhere" ;; esac
+  echo "${D}└${N}  ${G}${B}All set.${N} Open Notion and press ${B}Cmd+K${N}."
+  echo "   ${D}If Notion was already open, it restarts once so the search can attach.${N}"
+  echo "   ${D}Manage it any time with:${N} notion-search"
+  case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) echo "   ${Y}!${N} add ~/.local/bin to your PATH to run notion-search from anywhere" ;; esac
   echo
 }
 
 do_status() {
-  echo "  $(state_line)"
+  echo "${D}│${N}  $(state_line)"
   if [[ -f "$PLIST" ]]; then
     if ps -axo command= | grep -q "^/Applications/Notion.app/Contents/MacOS/Notion --remote-debugging-port"; then
       ok "Notion is running with the search hook"
     elif ps -axo command= | grep -q "^/Applications/Notion.app/Contents/MacOS/Notion"; then
-      echo "  ${Y}!${N} Notion is open without the hook; the service restarts it within seconds"
-    else echo "  ${D}Notion is not open${N}"; fi
-    echo; tail -n 6 "$LOG" 2>/dev/null | sed 's/^/  '"$D"'/; s/$/'"$N"'/'
+      echo "${D}│${N}  ${Y}!${N} Notion is open without the hook; the service restarts it within seconds"
+    else echo "${D}│${N}  ${D}Notion is not open${N}"; fi
+    echo "${D}│${N}"; tail -n 6 "$LOG" 2>/dev/null | sed "s/^/${D}│  /; s/\$/${N}/"
   fi
 }
 
@@ -215,31 +215,37 @@ do_reindex() { [[ -f "$PLIST" ]] || { die "Not installed."; return 1; }
   UI_TITLE="rebuilding the index"; ui_init "Index your pages" "Background service"
   ui_start 0; run_py --index || { ui_fail; return 1; }; ui_done 0
   ui_start 1; launchctl bootstrap "$DOMAIN" "$PLIST" || { ui_fail; return 1; }; ui_done 1
-  echo "  ${G}${B}Done.${N} The service is running again."; echo; }
+  echo "${D}└${N}  ${G}${B}Done.${N} The service is running again."; echo; }
 
 do_uninstall() {
   stop; rm -f "$PLIST" "$LINK"; ok "Service removed (Notion itself was never modified)"
   if [[ "${1:-}" == "--purge" ]]; then
     rm -rf "$DATA" "$LOG" "$DIR/.venv"; ok "Index, model (0.9 GB), log and Python environment deleted"
     
-  else echo "  ${D}Kept the index and Python environment: install again anytime.${N}"; fi
+  else echo "${D}│${N}  ${D}Kept the index, model and Python environment: install again anytime.${N}"; fi
 }
 
 # ── menu ────────────────────────────────────────────────────────────────────
 
-header() { printf '\033[H\033[2J\n  %sNotion Search%s\n  %s\n\n' "$B" "$N" "$(state_line)"; }
+header() {
+  printf '\033[H\033[2J\n%s┌%s  %sNotion Search%s\n%s│%s  %s\n%s│%s\n' "$D" "$N" "$B" "$N" "$D" "$N" "$(state_line)" "$D" "$N"
+}
 
-pick() {  # pick OPTION...  -> CHOICE = chosen index; returns 1 on q/esc
-  local opts=("$@") sel=0 key k2 i
+pick() {  # pick TITLE OPTION...  (OPTION = "label|description")  -> CHOICE = chosen index; returns 1 on q/esc
+  local title="$1"; shift
+  local opts=("$@") sel=0 key k2 i label desc width
+  width=$(( $(tput cols 2>/dev/null || echo 80) - 22 ))
   tput civis 2>/dev/null
   while true; do
     header
+    printf '%s◆%s  %s\n' "$C" "$N" "$title"
     for i in "${!opts[@]}"; do
-      local label="${opts[$i]%%|*}" desc=""; [[ "${opts[$i]}" == *"|"* ]] && desc="${opts[$i]#*|}"
-      if [[ $i -eq $sel ]]; then printf '  %s❯ %-11s%s %s%s%s\n' "$C" "$label" "$N" "$D" "$desc" "$N"
-      else printf '    %-11s %s%s%s\n' "$label" "$D" "$desc" "$N"; fi
+      label="${opts[$i]%%|*}"; desc=""; [[ "${opts[$i]}" == *"|"* ]] && desc="${opts[$i]#*|}"
+      desc="${desc:0:$width}"
+      if [[ $i -eq $sel ]]; then printf '%s│%s  %s●%s %s%-10s%s %s%s%s\n' "$D" "$N" "$C" "$N" "$B" "$label" "$N" "$D" "$desc" "$N"
+      else printf '%s│%s  %s○ %-10s %s%s\n' "$D" "$N" "$D" "$label" "$desc" "$N"; fi
     done
-    printf '\n  %s↑↓ move · enter select · q quit%s\n' "$D" "$N"
+    printf '%s└%s  %s↑↓ move · enter select · q quit%s\n' "$D" "$N" "$D" "$N"
     IFS= read -rsn1 key
     case "$key" in
       $'\033') read -rsn2 -t 1 k2 || true
@@ -256,22 +262,23 @@ menu() {
   while true; do
     local install_label="Install|Set up the search service and index your Notion"
     [[ -f "$PLIST" ]] && install_label="Update|Reinstall the service and refresh dependencies"
-    pick "$install_label" \
+    pick "What would you like to do?" "$install_label" \
       "Status|Is it running, and is Notion hooked?" \
       "Restart|Restart the background service" \
       "Reindex|Re-read all your Notion pages from scratch" \
-      "Uninstall|Remove the service (your Notion is never touched)" \
+      "Uninstall|Remove the service (Notion is never touched)" \
       "Quit|Close this menu" || break
     header
     case $CHOICE in
       0) do_install;; 1) do_status;; 2) do_restart;; 3) do_reindex;;
-      4) pick "Service|Remove the service only; keep the index and model" \
-              "Everything|Also delete the index, model and Python environment (frees about 1.7 GB)" \
+      4) pick "What should be removed?" \
+              "Service|The background service only; keep the index and model" \
+              "Everything|Also the index, model and Python environment" \
               "Cancel|Go back" && header &&
          case $CHOICE in 0) do_uninstall;; 1) do_uninstall --purge;; *) continue;; esac;;
       5) break;;
     esac
-    printf '\n  %sPress any key to go back%s' "$D" "$N"; read -rsn1 _
+    printf '%s│%s\n%s└%s  %sPress any key to go back%s' "$D" "$N" "$D" "$N" "$D" "$N"; read -rsn1 _
   done
   tput cnorm 2>/dev/null; clear
 }
