@@ -67,7 +67,7 @@ Run `notion-search` in Terminal for an arrow-key menu:
 | Option | What it does |
 |---|---|
 | Update | Gets the newest release from PyPI, then refreshes the service and index |
-| Status | Shows whether the service is running and Notion is hooked |
+| Status | Shows whether the service is running and linked to Notion |
 | Restart | Restarts the background service |
 | Reindex | Rebuilds the whole index from scratch (about 2 to 3 minutes) |
 | Uninstall | After you confirm, removes everything: the service, index, model and the command itself |
@@ -76,14 +76,14 @@ Before anything is installed, the menu is short: Install and Quit. The same acti
 
 ## Troubleshooting
 
-- **Results look slow or come from Notion's own search:** run `notion-search status`. The service must be running and Notion must be hooked.
+- **Results look slow or come from Notion's own search:** run `notion-search status`. The service must be running and linked to Notion.
 - **A new page does not appear:** wait about 15 seconds, and make sure Notion Desktop has opened that page at least once.
 - **Results look stale or wrong:** run Reindex from the menu.
 - **Something else:** `notion-search logs` follows `~/Library/Logs/NotionSearch.log`.
 
 ## Uninstall
 
-Run `notion-search`, choose **Uninstall**, and confirm. It removes everything Notion Search put on your Mac: the background service, the index, the 900 MB model, the log, uv's cached copies and the `notion-search` command itself (about 1.7 GB in all). Notion itself is never modified, so it behaves exactly as before. `uv` stays, because other tools may use it.
+Run `notion-search`, choose **Uninstall**, and confirm. It removes everything Notion Search put on your Mac: the background service, the index, the 900 MB model, the log and the `notion-search` command itself. Notion itself is never modified, so it behaves exactly as before. `uv` stays, because other tools may use it.
 
 From a script: `notion-search uninstall --yes` skips the question, and `--keep-data` removes only the service and keeps the index, model and command.
 
@@ -111,7 +111,7 @@ re-embeds only the pages whose text changed
 | File | Role |
 |---|---|
 | `src/notion_search/cli.py` | The `notion-search` command: menu, install, status, reindex, uninstall |
-| `src/notion_search/service.py` | Background service: keeps Notion hooked, answers searches, keeps the index fresh |
+| `src/notion_search/service.py` | Background service: keeps Notion linked, answers searches, keeps the index fresh |
 | `src/notion_search/engine.py` | Hybrid retrieval, ranking, snippets, and Notion's response format |
 | `src/notion_search/indexer.py` | Reads the Notion database, builds pages and chunks, stores the index |
 | `src/notion_search/embedder.py` | Runs EmbeddingGemma 2 on the GPU with the model card's prompts |

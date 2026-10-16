@@ -249,9 +249,9 @@ def plan_steps(temporary, restarting):
 
 def do_install():
     if sys.platform != "darwin" or os.uname().machine != "arm64":
-        return fail("Needs a Mac with Apple Silicon (MLX).")
+        return fail("Notion Search needs a Mac with an Apple Silicon chip.")
     if not Path("/Applications/Notion.app").exists():
-        return fail("Install Notion Desktop first (/Applications/Notion.app).")
+        return fail("Install Notion Desktop first. It must be in the Applications folder.")
     restarting = PLIST.exists()
     temporary = running_from_uvx()
     steps = plan_steps(temporary, restarting)
@@ -264,7 +264,7 @@ def do_install():
 
     for i, (key, _) in enumerate(steps):
         if key == "program":  # started with `uvx notion-search install`: put the command somewhere permanent
-            ui.start(i, "uv puts the program in its own environment")
+            ui.start(i, "uv keeps the program in its own folder")
             python = install_program(ui)
             if not python:
                 return ui.failed()
@@ -277,7 +277,7 @@ def do_install():
             if not run_service(ui, "--index", python):
                 return ui.failed()
         else:
-            ui.start(i, "Registering the service that starts at every login")
+            ui.start(i, "Setting up the service that starts when you log in")
             if not register_service(python):
                 return ui.failed()
         ui.done(i)
@@ -322,11 +322,11 @@ def do_update():
         os.environ["NS_UPDATING"] = "1"
         os.execv(python, [python, "-m", "notion_search.cli", "install"])  # the new code runs the setup
     if newer and tool:
-        out(f"{RAIL}  {Y}!{N} Version {latest} is out (you have {current}). Upgrade with: {B}pipx upgrade notion-search{N}")
+        out(f"{RAIL}  {Y}!{N} Version {latest} is available and you have {current}. Upgrade with: {B}pipx upgrade notion-search{N}")
     elif latest:
-        out(f"{RAIL}  {G}✓{N} You have the newest version ({current})")
+        out(f"{RAIL}  {G}✓{N} You have the newest version ({current}).")
     else:
-        out(f"{RAIL}  {D}Could not check for a newer version (offline?). Refreshing what is installed.{N}")
+        out(f"{RAIL}  {D}Could not check for a new version. Are you offline? Refreshing what is installed.{N}")
     do_install()
 
 
@@ -337,11 +337,11 @@ def do_status():
         ps = subprocess.run(["ps", "-axo", "command="], capture_output=True, text=True).stdout
         notion = "/Applications/Notion.app/Contents/MacOS/Notion"
         if f"{notion} --remote-debugging-port" in ps:
-            ok("Notion is running with the search hook")
+            ok("Notion is linked to Notion Search.")
         elif notion in ps:
-            out(f"{RAIL}  {Y}!{N} Notion is open without the hook; the service restarts it within seconds")
+            out(f"{RAIL}  {Y}!{N} Notion is open without the search link. The service restarts it in a few seconds.")
         else:
-            out(f"{RAIL}  {D}Notion is not open{N}")
+            out(f"{RAIL}  {D}Notion is not open.{N}")
         if LOG.exists():
             out(RAIL)
             for line in LOG.read_text(errors="ignore").splitlines()[-6:]:
@@ -350,14 +350,14 @@ def do_status():
 
 def do_restart():
     if not PLIST.exists():
-        return fail("Not installed.")
+        return fail("Notion Search is not installed.")
     launchctl("kickstart", "-k", f"{DOMAIN}/{LABEL}")
     ok("Restarted")
 
 
 def do_reindex():
     if not PLIST.exists():
-        return fail("Not installed.")
+        return fail("Notion Search is not installed.")
     stop_service()
     for f in DATA.glob("index.db*"):
         f.unlink()
@@ -384,14 +384,15 @@ def program_remover():
 
 
 def do_uninstall(keep_data=False):
-    """Remove Notion Search. By default everything: the service, index, model, log, old installer folders, uv's cached
-    copies and the notion-search command. keep_data=True removes only the service."""
+    """Remove Notion Search. By default everything: the service, index, model, log, old installer folders and the
+    notion-search command. keep_data=True removes only the service. uv's shared cache is left alone: other uv
+    programs can hold its lock for hours, and `uv cache clean` would wait for them."""
     stop_service()
     PLIST.unlink(missing_ok=True)
-    ok("Service removed (Notion itself was never modified)")
+    ok("Removed the background service.")
     remover = program_remover()
     if keep_data:
-        out(f"{RAIL}  {D}Kept the index, the model and the command: install again anytime.{N}")
+        out(f"{RAIL}  {D}Kept the index, the model and the command. You can install again at any time.{N}")
         return
     import shutil
 
@@ -399,15 +400,13 @@ def do_uninstall(keep_data=False):
         shutil.rmtree(path, ignore_errors=True)
     LOG.unlink(missing_ok=True)
     (Path.home() / ".local/bin/notion-search").unlink(missing_ok=True) if not remover else None
-    ok("Index, model and log deleted")
-    if shutil.which("uv"):
-        subprocess.run(["uv", "cache", "clean", "notion-search"], capture_output=True)  # uvx's temporary copies
+    ok("Deleted the index, the model and the log.")
     if remover:  # last on purpose: this deletes the environment this process runs from
         done = subprocess.run(remover, capture_output=True, text=True)
-        ok("The notion-search command removed") if done.returncode == 0 else fail(f"Could not remove the command: run {' '.join(remover)}")
+        ok("Removed the notion-search command.") if done.returncode == 0 else fail(f"Could not remove the command. Run this: {' '.join(remover)}")
     else:
-        out(f"{RAIL}  {D}Remove the program with the tool you installed it with (pip uninstall notion-search).{N}")
-    out(f"{D}└{N}  {G}{B}Notion Search is gone.{N} Notion itself was never modified.")
+        out(f"{RAIL}  {D}Remove the program with the tool that installed it, for example: pip uninstall notion-search{N}")
+    out(f"{D}└{N}  {G}{B}Notion Search is removed.{N} Your Notion pages and app are not changed.")
 
 
 def confirm_uninstall():
@@ -415,11 +414,11 @@ def confirm_uninstall():
     if "--yes" in sys.argv:
         return True
     if not (TTY and sys.stdin.isatty()):
-        out("Run with --yes to remove Notion Search without a prompt.")
+        out("To remove Notion Search without a question, add --yes.")
         return False
-    out(f"{RAIL}  This removes the background service, the index, the model and the notion-search")
-    out(f"{RAIL}  command. Notion itself is not touched.")
-    return input(f"{D}└{N}  Remove everything? {D}[y/N]{N} ").strip().lower() in ("y", "yes")
+    out(f"{RAIL}  This removes the background service, the index, the model and the")
+    out(f"{RAIL}  notion-search command. Your Notion pages and app stay as they are.")
+    return input(f"{D}└{N}  Remove Notion Search? {D}[y/N]{N} ").strip().lower() in ("y", "yes")
 
 
 # ── menu (clack-style) ────────────────────────────────────────────────────────
@@ -483,7 +482,7 @@ def menu_options():
     """Only what makes sense right now: a full menu once installed, a short one before (or after a partial removal)."""
     if PLIST.exists():
         return [("Update", "Get the newest version and refresh the service"),
-                ("Status", "Is it running, and is Notion hooked?"),
+                ("Status", "Is it running, and linked to Notion?"),
                 ("Restart", "Restart the background service"),
                 ("Reindex", "Re-read all your Notion pages from scratch"),
                 ("Uninstall", "Remove everything (Notion is never touched)"),
