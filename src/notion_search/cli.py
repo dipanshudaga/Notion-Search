@@ -446,7 +446,7 @@ def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "menu"
     try:
         if cmd == "menu" and TTY and sys.stdin.isatty():
-            menu()
+            do_install() if not PLIST.exists() else menu()  # first run: just set everything up
         elif cmd in COMMANDS:
             COMMANDS[cmd]()
         else:

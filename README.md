@@ -7,10 +7,10 @@ Notion Search keeps the same Cmd+K box and replaces what answers it. Every page 
 ## Quick start
 
 ```bash
-uvx notion-search install
+uvx notion-search
 ```
 
-One command does everything: it installs the program, downloads the model, indexes your pages and starts the background service. Afterwards, run `notion-search` any time to open the menu.
+That one command does everything: it installs the program, downloads the model, indexes your pages and starts the background service. Afterwards, run `notion-search` any time to open the menu.
 
 No `uv` yet? Use the one-line installer below. It installs `uv` for you.
 
@@ -29,7 +29,7 @@ The first run takes 5 to 10 minutes. It installs the tool with `uv`, then works 
 2. Reads your pages from Notion's local database and builds the search index.
 3. Registers a background service that starts at every login.
 
-Prefer to install the program first? The package is on [PyPI](https://pypi.org/project/notion-search/). Run `uv tool install -q notion-search` (`-q` hides the long list of packages; or use `pipx install notion-search`), then `notion-search install`. Plain `pip install` fails on current Macs with Homebrew's Python, because that Python is "externally managed". Use `uv` or `pipx`, which give the app its own environment.
+Prefer to install the program first? Run `uv tool install notion-search` (or `pipx install notion-search`), then run `notion-search`. The first run sets everything up, and later runs open the menu. Plain `pip install` fails on current Macs with Homebrew's Python, because that Python is "externally managed". Use `uv` or `pipx`, which give the app its own environment.
 
 Plan for about 2 GB of free disk space. When the output says "Background service started", you are done.
 
