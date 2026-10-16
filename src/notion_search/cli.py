@@ -369,22 +369,22 @@ def wait_key():
 
 def menu():
     while True:
-        first = ("Update", "Reinstall and refresh the service") if PLIST.exists() \
-            else ("Install", "Set up search and index your Notion")
+        first = ("Update", "Reinstall the service and refresh the index") if PLIST.exists() \
+            else ("Install", "Set up the search service and index your Notion")
         choice = pick("What would you like to do?", [
             first,
             ("Status", "Is it running, and is Notion hooked?"),
             ("Restart", "Restart the background service"),
-            ("Reindex", "Rebuild the index from your pages"),
-            ("Uninstall", "Remove it (Notion is untouched)"),
+            ("Reindex", "Re-read all your Notion pages from scratch"),
+            ("Uninstall", "Remove the service (Notion is never touched)"),
             ("Quit", "Close this menu")])
         if choice in (None, 5):
             break
         header()
         if choice == 4:
             sub = pick("What should be removed?", [
-                ("Service", "Remove only the background service"),
-                ("Everything", "Also the index, model and command"),
+                ("Service", "The background service only; keep the index and model"),
+                ("Everything", "Also the index, the model and the notion-search command"),
                 ("Cancel", "Go back")])
             if sub in (None, 2):
                 continue
