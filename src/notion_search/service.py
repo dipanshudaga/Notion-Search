@@ -5,7 +5,7 @@
   * re-indexes in the background whenever Notion's local database changes
 
 Notion's app files are never touched, so its signature (and the Keychain) stay as shipped.
-`python notion_service.py --download` fetches the model, `--index` builds/updates the index once. Both exit when done.
+`python -m notion_search.service --download` fetches the model, `--index` builds/updates the index once. Both exit when done.
 """
 
 import asyncio
@@ -22,8 +22,8 @@ from urllib.parse import urlparse
 
 import websockets
 
-from notion_indexer import NOTION_DB, snapshot
-from search_engine import Engine
+from .engine import Engine
+from .indexer import NOTION_DB, snapshot
 
 CDP_TABS = "http://127.0.0.1:9222/json"
 NOTION_BIN = "/Applications/Notion.app/Contents/MacOS/Notion"
@@ -178,7 +178,7 @@ def bar(done, total, unit="chunks", scale=1):
 async def main():
     indexing = "--index" in sys.argv
     if "--download" in sys.argv:
-        from embedder import model_path
+        from .embedder import model_path
         return model_path(say, lambda d, t: bar(d, t, "MB", 1_000_000))
     if indexing:
         say("Loading the model into memory")

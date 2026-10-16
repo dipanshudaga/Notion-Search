@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "notion-search"
+version = "0.1.0"
+description = "Offline, private hybrid search (exact words + meaning) for Notion Desktop's Cmd+K, running on your Mac"
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+authors = [{ name = "Dipanshu Daga" }]
+keywords = ["notion", "search", "embeddings", "mlx", "offline"]
+classifiers = ["Operating System :: MacOS", "Environment :: Console", "Programming Language :: Python :: 3"]
+dependencies = [
+    "mlx>=0.32.3",
+    "mlx-vlm>=0.7.8",            # EmbeddingGemma 2 support ships on PyPI from 0.7.x
+    "transformers>=5.19",
+    "huggingface-hub>=1.33",
+    "numpy>=2.5",
+    "websockets>=13",
+]
+
+[project.scripts]
+notion-search = "notion_search.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/dipanshudaga/Notion-Search"
+Issues = "https://github.com/dipanshudaga/Notion-Search/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/notion_search"]

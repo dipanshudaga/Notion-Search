@@ -1,0 +1,18 @@
+name: Publish to PyPI
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi        # the GitHub environment you created; PyPI trusts this exact name
+    permissions:
+      id-token: write        # lets PyPI verify this run without an API token (trusted publishing)
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv build
+      - uses: pypa/gh-action-pypi-publish@release/v1

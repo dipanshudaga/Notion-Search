@@ -11,7 +11,7 @@ import sqlite3
 from collections import namedtuple
 from pathlib import Path
 
-from embedder import DATA, MODEL, doc_prompt
+from .embedder import DATA, MODEL, doc_prompt
 
 NOTION_DB = Path.home() / "Library/Application Support/Notion/notion.db"
 INDEX_DB = DATA / "index.db"

@@ -12,12 +12,12 @@ You need a Mac with Apple Silicon (M1 or newer) and Notion Desktop in `/Applicat
 curl -fsSL https://raw.githubusercontent.com/dipanshudaga/Notion-Search/main/install.sh | bash
 ```
 
-The first run takes 5 to 10 minutes and works through four numbered steps:
+The first run takes 5 to 10 minutes. It installs the tool with `uv`, then works through three numbered steps:
 
-1. Sets up a private Python 3.12 environment. It uses your Python 3.12 if you have one and fetches one (through `uv`) if you do not. Git, Homebrew and Xcode are not required.
-2. Downloads the EmbeddingGemma 2 model from Hugging Face (about 900 MB, once, no account needed). The audio part of the model, which this app does not use, is skipped. The model is stored in the app's own folder.
-3. Reads your pages from Notion's local database and builds the search index.
-4. Registers a background service that starts at every login.
+0. Installs `uv` if you do not have it. `uv` fetches Python 3.12 and the Notion Search package into their own isolated environment. Git, Homebrew and Xcode are not required.
+1. Downloads the EmbeddingGemma 2 model from Hugging Face (about 900 MB, once, no account needed). The audio part of the model, which this app does not use, is skipped. The model is stored in the app's own folder.
+2. Reads your pages from Notion's local database and builds the search index.
+3. Registers a background service that starts at every login.
 
 Plan for about 2 GB of free disk space. When the output says "Background service started", you are done.
 
@@ -58,9 +58,9 @@ Run `notion-search` in Terminal for an arrow-key menu:
 | Status | Shows whether the service is running and Notion is hooked |
 | Restart | Restarts the background service |
 | Reindex | Rebuilds the whole index from scratch (about 2 to 3 minutes) |
-| Uninstall | Removes the service, optionally with the index, model and Python environment |
+| Uninstall | Removes the service, optionally with the index and model |
 
-The same actions work as commands: `notion-search status`, `restart`, `reindex`, `uninstall [--purge]`, and `logs` for debugging. If the command is not found, run `~/.notion-search/notion-search`.
+The same actions work as commands: `notion-search status`, `restart`, `reindex`, `uninstall [--purge]`, and `logs` for debugging. If the command is not found, run `uv tool update-shell` and open a new Terminal window.
 
 ## Troubleshooting
 
@@ -71,7 +71,7 @@ The same actions work as commands: `notion-search status`, `restart`, `reindex`,
 
 ## Uninstall
 
-Run `notion-search`, choose Uninstall, then **Service** to keep the index and model or **Everything** to also delete the index, the 900 MB model and the Python environment (about 1.7 GB freed). Notion itself is never modified, so it behaves exactly as before.
+Run `notion-search`, choose Uninstall, then **Service** to keep the index and model or **Everything** to also delete the index and the 900 MB model. To remove the program itself afterwards, run `uv tool uninstall notion-search`. Notion itself is never modified, so it behaves exactly as before.
 
 ## Privacy and security
 
@@ -96,12 +96,12 @@ re-embeds only the pages whose text changed
 
 | File | Role |
 |---|---|
-| `notion-search` | Menu and install, update, reindex and uninstall commands |
-| `install.sh` | One-line bootstrap that downloads the project and runs the installer |
-| `notion_service.py` | Background service: keeps Notion hooked, answers searches, keeps the index fresh |
-| `search_engine.py` | Hybrid retrieval, ranking, snippets, and Notion's response format |
-| `notion_indexer.py` | Reads the Notion database, builds pages and chunks, stores the index |
-| `embedder.py` | Runs EmbeddingGemma 2 on the GPU with the model card's prompts |
+| `src/notion_search/cli.py` | The `notion-search` command: menu, install, status, reindex, uninstall |
+| `src/notion_search/service.py` | Background service: keeps Notion hooked, answers searches, keeps the index fresh |
+| `src/notion_search/engine.py` | Hybrid retrieval, ranking, snippets, and Notion's response format |
+| `src/notion_search/indexer.py` | Reads the Notion database, builds pages and chunks, stores the index |
+| `src/notion_search/embedder.py` | Runs EmbeddingGemma 2 on the GPU with the model card's prompts |
+| `install.sh` | One-line bootstrap: installs `uv`, then the package, then runs `notion-search install` |
 
 The index and the model live in `~/Library/Application Support/NotionSearch`. All model work runs on a single thread, because MLX streams are per-thread.
 

@@ -9,8 +9,8 @@ from functools import lru_cache
 
 import numpy as np
 
-from embedder import DIM, QUERY_LEN, Embedder, query_prompt
-from notion_indexer import open_index, snapshot, store
+from .embedder import DIM, QUERY_LEN, Embedder, query_prompt
+from .indexer import open_index, snapshot, store
 
 HL_OPEN, HL_CLOSE = "<gzkNfoUU>", "</gzkNfoUU>"  # Notion's own highlight markers; <b> would show up as text
 COVER_BONUS, TITLE_BONUS = 0.05, 0.03  # pages holding ALL the query words (title counts extra) beat partial matches
@@ -148,7 +148,7 @@ class Engine:
         return {"results": results, "recordMap": record_map, "total": len(results), "trackEventProperties": {}}
 
 
-if __name__ == "__main__":  # python search_engine.py "query" ...: quick look at what comes back, and how fast
+if __name__ == "__main__":  # python -m notion_search.engine "query" ...: quick look at what comes back, and how fast
     import sys
 
     engine = Engine()
