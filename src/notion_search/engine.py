@@ -14,6 +14,7 @@ from .indexer import open_index, snapshot, store
 
 HL_OPEN, HL_CLOSE = "<gzkNfoUU>", "</gzkNfoUU>"  # Notion's own highlight markers; <b> would show up as text
 COVER_BONUS, TITLE_BONUS = 0.05, 0.03  # pages holding ALL the query words (title counts extra) beat partial matches
+CURRENT_BONUS = 0.05                    # the page you are on, when it already matches the query
 LABEL_EXACT, LABEL_ALL = 0.08, 0.03    # a short block (toggle/heading title) that IS the query, or holds all its words
 # A meaning match must stand out this many std-devs from the query's scores over all pages (DigUp's idea; it replaces
 # a fixed cosine cutoff). Measured on 836 pages: real queries peak at z 4.6-5.5, gibberish at 3.5.
@@ -77,8 +78,8 @@ class Engine:
             best.setdefault(self.chunk_page[i], self.chunk_text[i])
         return list(best.items())
 
-    def search(self, text, limit=12):
-        """[(page_id, snippet)], best first."""
+    def search(self, text, limit=12, current=None):
+        """[(page_id, snippet)], best first. `current` is the id of the page open in Notion."""
         terms = self.terms(text)
         if not terms:
             return []
@@ -95,6 +96,8 @@ class Engine:
                             + TITLE_BONUS * found(title.lower()))
             kind = self.label_match(labels, terms)[0]
             scores[pid] += LABEL_EXACT if kind == "exact" else LABEL_ALL if kind == "all" else 0
+            if pid == current:
+                scores[pid] += CURRENT_BONUS
         best = sorted((p for p in scores if p in self.pages), key=scores.get, reverse=True)[:limit]
         return [(pid, self.snippet(pid, terms, chunks.get(pid))) for pid in best]
 
@@ -138,13 +141,13 @@ class Engine:
         pat = "|".join(r"\b" + re.escape(t) + r"\w*" for t in terms)
         return re.sub(f"({pat})", f"{HL_OPEN}\\1{HL_CLOSE}", text, flags=re.I)
 
-    def v3(self, text, limit=12):
+    def v3(self, text, limit=12, current=None):
         """What /api/v3/search returns. Notion's UI crashes without trackEventProperties and renders titles
         only from the recordMap, so every result's block (and its parent) travels with it."""
         snap, results, terms = self.snap, [], self.terms(text)
         record_map = {"block": {}, "collection": {}, "space": {}}
         default_space = next(iter(snap.spaces), None)
-        for pid, snip in self.search(text, limit):
+        for pid, snip in self.search(text, limit, current):
             block = snap.blocks.get(pid)
             if not block:
                 continue

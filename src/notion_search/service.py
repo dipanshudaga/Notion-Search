@@ -13,12 +13,13 @@ import base64
 import itertools
 import os
 import json
+import re
 import subprocess
 import sys
 import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 import websockets
 
@@ -72,6 +73,16 @@ async def keep_notion_hooked():
 
 # ── Search hook ──────────────────────────────────────────────────────────────
 
+def page_id_from_url(url):
+    """The page open in Notion, from the request's Referer: .../Title-<32 hex> or a peek view (?p=<32 hex>)."""
+    if not url:
+        return None
+    u = urlparse(url)
+    found = re.search(r"[0-9a-f]{32}", (parse_qs(u.query).get("p") or [""])[0]) or re.search(r"[0-9a-f]{32}", u.path)
+    h = found.group() if found else None
+    return f"{h[:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:]}" if h else None
+
+
 async def answer(ws, paused, engine):
     loop, req = asyncio.get_running_loop(), paused["request"]
     body = None
@@ -80,7 +91,9 @@ async def answer(ws, paused, engine):
             query = json.loads(req.get("postData") or "{}").get("query", "").strip()
             if query:
                 t = time.perf_counter()
-                data = await loop.run_in_executor(EXEC, engine.v3, query)
+                headers = req.get("headers", {})
+                current = page_id_from_url(headers.get("Referer") or headers.get("referer"))
+                data = await loop.run_in_executor(EXEC, engine.v3, query, 12, current)
                 body = base64.b64encode(json.dumps(data).encode()).decode()
                 log(f"'{query}': {len(data['results'])} results in {(time.perf_counter() - t) * 1000:.0f} ms")
         except Exception as e:

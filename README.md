@@ -58,7 +58,7 @@ Each query is run two ways and the results are merged.
 - **Exact words:** SQLite FTS5 with stemming and prefix matching. A title match counts more than a body match.
 - **Meaning:** the query is embedded and compared with every chunk. A chunk only counts when its similarity stands well above the typical score for that query (4 standard deviations), which keeps unrelated pages out and lets nonsense queries return nothing.
 
-Pages that contain all of your words are boosted, and titles that contain them are boosted again. The snippet shown under each result is cut from the place in the page where your rarest words cluster, with the matches highlighted.
+Pages that contain all of your words are boosted, and titles that contain them are boosted again. A short block that matches your query, such as a toggle titled "Github" when you search "github", puts its page first, and the page you currently have open gets a small boost when it already matches. The snippet shown under each result is cut from the place in the page where your rarest words cluster, with the matches highlighted.
 
 ## The control menu
 
