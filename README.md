@@ -70,7 +70,7 @@ Run `notion-search` in Terminal for an arrow-key menu:
 | Status | Shows whether the service is running and Notion is hooked |
 | Restart | Restarts the background service |
 | Reindex | Rebuilds the whole index from scratch (about 2 to 3 minutes) |
-| Uninstall | Removes the service, optionally with the index and model |
+| Uninstall | Removes the service, or everything: the index, the model and the command itself |
 
 The same actions work as commands: `notion-search status`, `restart`, `reindex`, `uninstall [--purge]`, and `logs` for debugging. If the command is not found, run `uv tool update-shell` and open a new Terminal window.
 
@@ -83,7 +83,7 @@ The same actions work as commands: `notion-search status`, `restart`, `reindex`,
 
 ## Uninstall
 
-Run `notion-search`, choose Uninstall, then **Service** to keep the index and model or **Everything** to also delete the index and the 900 MB model. To remove the program itself afterwards, run `uv tool uninstall notion-search`. Notion itself is never modified, so it behaves exactly as before.
+Run `notion-search`, choose Uninstall, then **Service** to keep the index and model or **Everything** to also delete the index, the 900 MB model and the `notion-search` command itself, so nothing is left behind. Notion itself is never modified, so it behaves exactly as before.
 
 ## Privacy and security
 

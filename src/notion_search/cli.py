@@ -58,7 +58,7 @@ def stop_service():
 
 def state_line():
     if not PLIST.exists():
-        return f"{D}○ not installed{N}"
+        return f"{D}○ service not installed{N}"
     if service_pid():
         return f"{G}● running{N} {D}· {page_count()} pages indexed{N}"
     return f"{Y}○ installed, not running{N}"
@@ -276,20 +276,38 @@ def do_reindex():
     out(f"{D}└{N}  {G}{B}Done.{N} The service is running again.\n")
 
 
+def program_remover():
+    """The command that removes this installed program, or None when it was not installed by uv tool or pipx."""
+    tools = uv_output("tool", "dir")
+    if tools and sys.prefix.startswith(tools):
+        return ["uv", "tool", "uninstall", "notion-search"]
+    if "/pipx/venvs/" in sys.prefix:
+        return ["pipx", "uninstall", "notion-search"]
+    return None
+
+
 def do_uninstall(purge=False):
+    """Remove the service. With purge, also the index, the model and the notion-search command itself."""
     stop_service()
     PLIST.unlink(missing_ok=True)
     ok("Service removed (Notion itself was never modified)")
-    if purge:
-        import shutil
-
-        shutil.rmtree(DATA, ignore_errors=True)
-        LOG.unlink(missing_ok=True)
-        ok("Index, model and log deleted")
-    else:
+    remover = program_remover()
+    if not purge:
         out(f"{RAIL}  {D}Kept the index and model: install again anytime.{N}")
-    tool = "uv tool uninstall notion-search" if "/uv/tools/" in sys.prefix else "pipx uninstall notion-search"
-    out(f"{RAIL}  {D}To remove the program itself, run:{N} {tool}")
+        if remover:
+            out(f"{RAIL}  {D}To remove the command too, choose Everything, or run:{N} {' '.join(remover)}")
+        return
+    import shutil
+
+    shutil.rmtree(DATA, ignore_errors=True)
+    LOG.unlink(missing_ok=True)
+    ok("Index, model and log deleted")
+    if remover:  # last on purpose: this deletes the environment this process runs from
+        done = subprocess.run(remover, capture_output=True, text=True)
+        ok("The notion-search command removed") if done.returncode == 0 else fail(f"Could not remove the command: run {' '.join(remover)}")
+    else:
+        out(f"{RAIL}  {D}Remove the program with the tool you installed it with (pip uninstall notion-search).{N}")
+    out(f"{D}└{N}  {G}{B}Notion Search is gone.{N} Notion itself was never modified.")
 
 
 # ── menu (clack-style) ────────────────────────────────────────────────────────
@@ -365,12 +383,14 @@ def menu():
         if choice == 4:
             sub = pick("What should be removed?", [
                 ("Service", "The background service only; keep the index and model"),
-                ("Everything", "Also the index and model"),
+                ("Everything", "Also the index, the model and the notion-search command"),
                 ("Cancel", "Go back")])
             if sub in (None, 2):
                 continue
             header()
             do_uninstall(purge=sub == 1)
+            if sub == 1:  # the command is gone: nothing left to show a menu for
+                return
         else:
             [do_install, do_status, do_restart, do_reindex][choice]()
         wait_key()
