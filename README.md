@@ -4,6 +4,15 @@ Notion's built-in search often misses what you are looking for. It leans on exac
 
 Notion Search keeps the same Cmd+K box and replaces what answers it. Every page in your workspace is indexed on your Mac, and each query is answered by a hybrid of exact-word search and meaning-based search. The meaning side uses Google's **EmbeddingGemma 2** model, running locally on the Apple Silicon GPU. Nothing leaves your machine, and it keeps working offline.
 
+## Quick start
+
+```bash
+uv tool install notion-search
+notion-search install
+```
+
+No `uv` yet? Use the one-line installer below. It installs `uv` for you.
+
 ## Install
 
 You need a Mac with Apple Silicon (M1 or newer) and Notion Desktop in `/Applications`. Open Terminal and run:
