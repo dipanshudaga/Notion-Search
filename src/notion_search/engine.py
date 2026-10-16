@@ -14,6 +14,7 @@ from .indexer import open_index, snapshot, store
 
 HL_OPEN, HL_CLOSE = "<gzkNfoUU>", "</gzkNfoUU>"  # Notion's own highlight markers; <b> would show up as text
 COVER_BONUS, TITLE_BONUS = 0.05, 0.03  # pages holding ALL the query words (title counts extra) beat partial matches
+LABEL_EXACT, LABEL_ALL = 0.08, 0.03    # a short block (toggle/heading title) that IS the query, or holds all its words
 # A meaning match must stand out this many std-devs from the query's scores over all pages (DigUp's idea; it replaces
 # a fixed cosine cutoff). Measured on 836 pages: real queries peak at z 4.6-5.5, gibberish at 3.5.
 Z_GATE = 4.0
@@ -34,14 +35,14 @@ class Engine:
         changed = store(self.conn, snap.docs, self.embedder, progress)
         if changed or self.snap is None:
             self.pages = {r[0]: (r[1], r[2]) for r in self.conn.execute("SELECT id, title, snippet FROM pages")}
-            self.text = {r[0]: r[1:] for r in self.conn.execute("SELECT id, title, crumbs, body FROM fts")}
+            self.text = {r[0]: r[1:] for r in self.conn.execute("SELECT id, title, crumbs, body, labels FROM fts")}
             rows = self.conn.execute("SELECT page_id, text, vec FROM chunks").fetchall()
             self.chunk_page = [r[0] for r in rows]
             self.chunk_text = [r[1] for r in rows]
             self.vecs = (np.vstack([np.frombuffer(r[2], np.float32) for r in rows])
                          if rows else np.zeros((0, DIM), np.float32))
             self.qvec.cache_clear()
-            self.hay = [f"{t}\n{c}\n{b}".lower() for t, c, b in self.text.values()]
+            self.hay = [f"{t}\n{c}\n{b}".lower() for t, c, b, _ in self.text.values()]
             self.df = lru_cache(512)(lambda term: sum(term in h for h in self.hay) or 1)  # pages holding a word
         self.snap = snap
         return changed
@@ -54,7 +55,7 @@ class Engine:
 
     def words(self, terms, limit=25):
         """Pages containing every word (prefix match), then, for several words, pages containing any, best first."""
-        sql = "SELECT id FROM fts WHERE fts MATCH ? ORDER BY bm25(fts, 0, 8, 3, 1) LIMIT ?"
+        sql = "SELECT id FROM fts WHERE fts MATCH ? ORDER BY bm25(fts, 0, 8, 3, 1, 5) LIMIT ?"
         hits = {}
         for joiner in (" ", " OR "):
             for (pid,) in self.conn.execute(sql, (joiner.join(f'"{t}"*' for t in terms), limit)):
@@ -88,16 +89,35 @@ class Engine:
             scores[pid] = scores.get(pid, 0.0) + 1.0 / (RRF_K + rank)
             chunks[pid] = chunk
         for pid in scores:
-            title, crumbs, body = self.text[pid]
+            title, crumbs, body, labels = self.text[pid]
             found = lambda hay: sum(bool(re.search(r"\b" + re.escape(t), hay)) for t in terms) / len(terms)
             scores[pid] += (COVER_BONUS * found(f"{title}\n{crumbs}\n{body}".lower()) ** 2
                             + TITLE_BONUS * found(title.lower()))
+            kind = self.label_match(labels, terms)[0]
+            scores[pid] += LABEL_EXACT if kind == "exact" else LABEL_ALL if kind == "all" else 0
         best = sorted((p for p in scores if p in self.pages), key=scores.get, reverse=True)[:limit]
         return [(pid, self.snippet(pid, terms, chunks.get(pid))) for pid in best]
 
+    @staticmethod
+    def label_match(labels, terms):
+        """(kind, label): the page's best short block for these terms. kind is "exact", "all" or None."""
+        best = (None, "")
+        for label in labels.split("\n"):
+            words = re.findall(r"\w+", label.lower())
+            if words == terms:
+                return "exact", label
+            if words and best[0] is None and all(any(w.startswith(t) for w in words) for t in terms):
+                best = ("all", label)
+        return best
+
     def snippet(self, pid, terms, chunk):
-        """~200 characters of the page around where the query words cluster (else the best-matching chunk)."""
+        """~200 characters of the page: the short block that matches the query if there is one, else the place
+        where the query words cluster, else the best-matching chunk."""
         body = self.text[pid][2]
+        kind, label = self.label_match(self.text[pid][3], terms)
+        at = body.lower().find(label.lower()) if kind else -1
+        if at >= 0:
+            return body[at:at + 200].replace("\n", " ") + "..."
         pat = re.compile("|".join(r"\b" + re.escape(t) for t in terms), re.I)
         found = [(m.start(), m.group().lower()) for m in pat.finditer(body)]
         if not found:

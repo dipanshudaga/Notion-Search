@@ -15,7 +15,7 @@ from .embedder import DATA, MODEL, doc_prompt
 
 NOTION_DB = Path.home() / "Library/Application Support/Notion/notion.db"
 INDEX_DB = DATA / "index.db"
-FINGERPRINT = f"{MODEL} prompts1 chunks1500 len512 q8g128"  # change = every vector is recomputed on next start
+FINGERPRINT = f"{MODEL} prompts1 chunks1500 len512 q8g128 labels1"  # change = every vector is recomputed on next start
 PAGE_TYPES = {"page", "collection_view_page"}
 CHUNK_CHARS = 1500  # a long page becomes several chunks, each embedded on its own
 
@@ -25,7 +25,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS pages(id TEXT PRIMARY KEY, title TEXT, snippet TEXT, sig TEXT);
 CREATE TABLE IF NOT EXISTS chunks(page_id TEXT, n INTEGER, text TEXT, vec BLOB);
 CREATE INDEX IF NOT EXISTS chunks_page ON chunks(page_id);
-CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(id UNINDEXED, title, crumbs, body, tokenize='porter unicode61');
+CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(id UNINDEXED, title, crumbs, body, labels, tokenize='porter unicode61');
 CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v TEXT);
 """
 
@@ -130,8 +130,9 @@ def _crumbs(page, blocks, cols):
 
 
 def _lines(page, blocks):
-    """Every text block under the page, in reading order. Child pages are their own documents."""
-    out, seen, stack = [], set(), list(reversed(page["content"]))
+    """Every text block under the page, in reading order, plus the short ones (toggle and heading titles, labels).
+    Child pages are their own documents."""
+    out, labels, seen, stack = [], [], set(), list(reversed(page["content"]))
     while stack:
         bid = stack.pop()
         b = blocks.get(bid)
@@ -141,8 +142,10 @@ def _lines(page, blocks):
         text = block_text(b, blocks)
         if text:
             out.append(text)
+            if len(text) <= 50 and len(text.split()) <= 6 and "http" not in text:
+                labels.append(text)
         stack.extend(reversed(b["content"]))
-    return out
+    return out, labels
 
 
 def _chunks(lines):
@@ -169,9 +172,10 @@ def snapshot():
         name = title(b["properties"])
         if b["type"] not in PAGE_TYPES or not name or not live(b["id"]):
             continue
-        crumbs, lines = _crumbs(b, blocks, cols), _lines(b, blocks)
+        crumbs = _crumbs(b, blocks, cols)
+        lines, labels = _lines(b, blocks)
         body = "\n".join(lines)
-        docs[b["id"]] = {"id": b["id"], "title": name, "crumbs": crumbs, "body": body, "chunks": _chunks(lines),
+        docs[b["id"]] = {"id": b["id"], "title": name, "crumbs": crumbs, "body": body, "labels": "\n".join(labels), "chunks": _chunks(lines),
                          "snippet": body[:240] or crumbs or "Empty page",
                          "sig": hashlib.sha1(f"{name}\0{crumbs}\0{body}".encode()).hexdigest()}
     return Snapshot(docs, blocks, cols, spaces)
@@ -185,8 +189,10 @@ def open_index():
     row = conn.execute("SELECT v FROM meta WHERE k = 'fingerprint'").fetchone()
     if not row or row[0] != FINGERPRINT:
         with conn:
-            for table in ("pages", "chunks", "fts"):
+            conn.execute("DROP TABLE fts")  # its columns may have changed
+            for table in ("pages", "chunks"):
                 conn.execute(f"DELETE FROM {table}")
+            conn.executescript(SCHEMA)
             conn.execute("INSERT OR REPLACE INTO meta VALUES ('fingerprint', ?)", (FINGERPRINT,))
     return conn
 
@@ -204,7 +210,7 @@ def store(conn, docs, embedder, progress=None):
                 conn.execute(f"DELETE FROM {table} WHERE {col} = ?", (pid,))
         for d in todo:
             conn.execute("INSERT INTO pages VALUES (?, ?, ?, ?)", (d["id"], d["title"], d["snippet"], d["sig"]))
-            conn.execute("INSERT INTO fts VALUES (?, ?, ?, ?)", (d["id"], d["title"], d["crumbs"], d["body"]))
+            conn.execute("INSERT INTO fts VALUES (?, ?, ?, ?, ?)", (d["id"], d["title"], d["crumbs"], d["body"], d["labels"]))
         counts = {}
         for (d, c), v in zip(jobs, vecs):
             n = counts[d["id"]] = counts.get(d["id"], -1) + 1
