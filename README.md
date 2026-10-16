@@ -19,6 +19,8 @@ The first run takes 5 to 10 minutes. It installs the tool with `uv`, then works 
 2. Reads your pages from Notion's local database and builds the search index.
 3. Registers a background service that starts at every login.
 
+Prefer your own Python tooling? The package is on [PyPI](https://pypi.org/project/notion-search/). Install it with `uv tool install notion-search` or `pipx install notion-search`, then run `notion-search install`. Plain `pip install` fails on current Macs with Homebrew's Python, because that Python is "externally managed". Use `uv` or `pipx`, which give the app its own environment.
+
 Plan for about 2 GB of free disk space. When the output says "Background service started", you are done.
 
 ## Using it
