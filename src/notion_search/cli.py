@@ -1,6 +1,7 @@
-"""The `notion-search` command: an arrow-key menu, plus install, status, restart, reindex, uninstall and logs."""
+"""The `notion-search` command: an arrow-key menu, plus install, update, status, restart, reindex, uninstall and logs."""
 
 import importlib.metadata
+import json
 import os
 import re
 import sqlite3
@@ -9,6 +10,7 @@ import sys
 import termios
 import time
 import tty
+import urllib.request
 from pathlib import Path
 
 from .embedder import DATA
@@ -171,9 +173,9 @@ def running_from_uvx():
     return bool(cache) and sys.prefix.startswith(cache)
 
 
-def install_program(ui):
+def install_program(ui, spec=None):
     """Install the notion-search command permanently with `uv tool`, showing a spinner. Returns the new Python path."""
-    spec = os.environ.get("NOTION_SEARCH_SPEC") or f"notion-search=={importlib.metadata.version('notion-search')}"
+    spec = spec or os.environ.get("NOTION_SEARCH_SPEC") or f"notion-search=={importlib.metadata.version('notion-search')}"
     proc = subprocess.Popen(["uv", "tool", "install", "--python", "3.12", "--force", "--quiet", spec],
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     frames, f, t = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏", 0, time.time()
@@ -232,6 +234,41 @@ def do_install():
     if temporary and (bin_dir := uv_output("tool", "dir", "--bin")) and bin_dir not in os.environ.get("PATH", "").split(":"):
         out(f"   {Y}!{N} To use that command, run {B}uv tool update-shell{N} and open a new Terminal window.")
     out()
+
+
+def latest_version():
+    try:
+        with urllib.request.urlopen("https://pypi.org/pypi/notion-search/json", timeout=5) as r:
+            return json.load(r)["info"]["version"]
+    except (OSError, ValueError, KeyError):
+        return None
+
+
+def version_tuple(v):
+    return tuple(int(n) for n in re.findall(r"\d+", v))
+
+
+def do_update():
+    """Get the newest release from PyPI if there is one, then run the installer with the new code."""
+    current, latest = importlib.metadata.version("notion-search"), latest_version()
+    newer = bool(latest) and version_tuple(latest) > version_tuple(current)
+    tool = program_remover()
+    if newer and tool and tool[0] == "uv" and not running_from_uvx():
+        ui = Checklist("update", [f"Updating {current} → {latest}"])
+        ui.start(0, "uv installs the new version in its own environment")
+        python = install_program(ui, f"notion-search=={latest}")
+        if not python:
+            return ui.failed()
+        ui.done(0)
+        out(f"{D}└{N}  {G}Updated.{N} Now refreshing the service with the new version.\n")
+        os.execv(python, [python, "-m", "notion_search.cli", "install"])  # the new code runs the setup
+    if newer and tool:
+        out(f"{RAIL}  {Y}!{N} Version {latest} is out (you have {current}). Upgrade with: {B}pipx upgrade notion-search{N}")
+    elif latest:
+        out(f"{RAIL}  {G}✓{N} You have the newest version ({current})")
+    else:
+        out(f"{RAIL}  {D}Could not check for a newer version (offline?). Refreshing what is installed.{N}")
+    do_install()
 
 
 def do_status():
@@ -369,7 +406,7 @@ def wait_key():
 
 def menu():
     while True:
-        first = ("Update", "Reinstall the service and refresh the index") if PLIST.exists() \
+        first = ("Update", "Get the newest version and refresh the service") if PLIST.exists() \
             else ("Install", "Set up the search service and index your Notion")
         choice = pick("What would you like to do?", [
             first,
@@ -393,13 +430,13 @@ def menu():
             if sub == 1:  # the command is gone: nothing left to show a menu for
                 return
         else:
-            [do_install, do_status, do_restart, do_reindex][choice]()
+            [do_update if PLIST.exists() else do_install, do_status, do_restart, do_reindex][choice]()
         wait_key()
     print("\033[H\033[2J", end="")
 
 
 COMMANDS = {
-    "install": do_install, "status": do_status, "restart": do_restart, "reindex": do_reindex,
+    "install": do_install, "update": do_update, "status": do_status, "restart": do_restart, "reindex": do_reindex,
     "uninstall": lambda: do_uninstall("--purge" in sys.argv),
     "logs": lambda: os.execvp("tail", ["tail", "-f", str(LOG)]),
 }

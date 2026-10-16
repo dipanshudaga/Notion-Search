@@ -66,7 +66,7 @@ Run `notion-search` in Terminal for an arrow-key menu:
 
 | Option | What it does |
 |---|---|
-| Update | Reinstalls the service and refreshes dependencies |
+| Update | Gets the newest release from PyPI, then refreshes the service and index |
 | Status | Shows whether the service is running and Notion is hooked |
 | Restart | Restarts the background service |
 | Reindex | Rebuilds the whole index from scratch (about 2 to 3 minutes) |
