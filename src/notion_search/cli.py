@@ -328,18 +328,19 @@ def pick(title, options):
     """options: [(label, description)]. Returns the chosen index, or None on q / esc."""
     sel, fd = 0, sys.stdin.fileno()
     saved = termios.tcgetattr(fd)
-    width = os.get_terminal_size().columns - 22
     print("\033[?25l", end="")
     try:
         tty.setcbreak(fd)
         while True:
             header()
+            width = max(10, os.get_terminal_size().columns - 20)  # room for the rail, marker and label column
             print(f"{C}◆{N}  {title}")
             for i, (label, desc) in enumerate(options):
+                desc = desc if len(desc) <= width else desc[:width - 1] + "…"
                 if i == sel:
-                    print(f"{RAIL}  {G}■{N} {B}{label:<10}{N} {D}{desc[:width]}{N}")
+                    print(f"{RAIL}  {G}■{N} {B}{label:<10}{N} {D}{desc}{N}")
                 else:
-                    print(f"{RAIL}  {D}□ {label:<10} {desc[:width]}{N}")
+                    print(f"{RAIL}  {D}□ {label:<10} {desc}{N}")
             print(f"{D}└{N}  {D}↑↓ move · enter select · q quit{N}", flush=True)
             key = read_key()
             if key == "up":
@@ -368,22 +369,22 @@ def wait_key():
 
 def menu():
     while True:
-        first = ("Update", "Reinstall the service and refresh the index") if PLIST.exists() \
-            else ("Install", "Set up the search service and index your Notion")
+        first = ("Update", "Reinstall and refresh the service") if PLIST.exists() \
+            else ("Install", "Set up search and index your Notion")
         choice = pick("What would you like to do?", [
             first,
             ("Status", "Is it running, and is Notion hooked?"),
             ("Restart", "Restart the background service"),
-            ("Reindex", "Re-read all your Notion pages from scratch"),
-            ("Uninstall", "Remove the service (Notion is never touched)"),
+            ("Reindex", "Rebuild the index from your pages"),
+            ("Uninstall", "Remove it (Notion is untouched)"),
             ("Quit", "Close this menu")])
         if choice in (None, 5):
             break
         header()
         if choice == 4:
             sub = pick("What should be removed?", [
-                ("Service", "The background service only; keep the index and model"),
-                ("Everything", "Also the index, the model and the notion-search command"),
+                ("Service", "Remove only the background service"),
+                ("Everything", "Also the index, model and command"),
                 ("Cancel", "Go back")])
             if sub in (None, 2):
                 continue
