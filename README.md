@@ -22,16 +22,16 @@ You need a Mac with Apple Silicon (M1 or newer) and Notion Desktop in `/Applicat
 curl -fsSL https://raw.githubusercontent.com/dipanshudaga/Notion-Search/main/install.sh | bash
 ```
 
-The first run takes 5 to 10 minutes. It installs the tool with `uv`, then works through three numbered steps:
+The first run takes 5 to 10 minutes and shows four numbered steps with progress bars:
 
-0. Installs `uv` if you do not have it. `uv` fetches Python 3.12 and the Notion Search package into their own isolated environment. Git, Homebrew and Xcode are not required.
-1. Downloads the EmbeddingGemma 2 model from Hugging Face (about 900 MB, once, no account needed). The audio part of the model, which this app does not use, is skipped. The model is stored in the app's own folder.
-2. Reads your pages from Notion's local database and builds the search index.
-3. Registers a background service that starts at every login.
+1. **Installing the notion-search command.** `uv` (installed first if you do not have it) fetches Python 3.12 and the package into their own isolated environment. Git, Homebrew and Xcode are not required.
+2. **Downloading the model.** EmbeddingGemma 2 comes from Hugging Face: about 900 MB, once, no account needed. The audio part of the model, which this app does not use, is skipped. The model is stored in the app's own folder.
+3. **Indexing pages.** It reads your pages from Notion's local database and builds the search index.
+4. **Starting background services.** It registers a service that starts at every login.
 
 Prefer to install the program first? Run `uv tool install notion-search` (or `pipx install notion-search`), then run `notion-search`. The first run sets everything up, and later runs open the menu. Plain `pip install` fails on current Macs with Homebrew's Python, because that Python is "externally managed". Use `uv` or `pipx`, which give the app its own environment.
 
-Plan for about 2 GB of free disk space. When the output says "Background service started", you are done.
+Plan for about 2 GB of free disk space. When the screen says "All set", you are done.
 
 ## Using it
 
@@ -39,7 +39,7 @@ Open Notion and press **Cmd+K** (or Cmd+P). Nothing else changes.
 
 Notion has to be started with a debug port so the service can answer its search requests. If you open Notion normally, the service notices within a couple of seconds, quits it, and reopens it with the port enabled. Expect one short restart each time you launch Notion from the Dock or Spotlight. Your pages are safe, because Notion saves continuously.
 
-New and edited pages are picked up automatically, usually within 15 seconds. You never need to run an update command.
+New and edited pages are picked up automatically, usually within 15 seconds. To get a newer version of Notion Search itself, run `notion-search` and choose **Update**.
 
 ## What gets searched
 
@@ -58,7 +58,7 @@ Each query is run two ways and the results are merged.
 - **Exact words:** SQLite FTS5 with stemming and prefix matching. A title match counts more than a body match.
 - **Meaning:** the query is embedded and compared with every chunk. A chunk only counts when its similarity stands well above the typical score for that query (4 standard deviations), which keeps unrelated pages out and lets nonsense queries return nothing.
 
-Pages that contain all of your words are boosted, and titles that contain them are boosted again. A short block that matches your query, such as a toggle titled "Github" when you search "github", puts its page first, and the page you currently have open gets a small boost when it already matches. The snippet shown under each result is cut from the place in the page where your rarest words cluster, with the matches highlighted.
+Pages that contain all of your words are boosted, and titles that contain them are boosted again. A short block that matches your query, such as a toggle titled "Github" when you search "github", puts its page first, and the page you currently have open gets a small boost when it already matches. Under each result you see the one block of the page that matched best, never a run of neighbouring text, with the matching words highlighted.
 
 ## The control menu
 
@@ -72,7 +72,7 @@ Run `notion-search` in Terminal for an arrow-key menu:
 | Reindex | Rebuilds the whole index from scratch (about 2 to 3 minutes) |
 | Uninstall | Removes the service, or everything: the index, the model and the command itself |
 
-The same actions work as commands: `notion-search status`, `restart`, `reindex`, `uninstall [--purge]`, and `logs` for debugging. If the command is not found, run `uv tool update-shell` and open a new Terminal window.
+Before anything is installed, the menu is short: Install and Quit. The same actions work as commands: `notion-search install`, `update`, `status`, `restart`, `reindex`, `uninstall [--purge]`, and `logs` for debugging. If the command is not found, run `uv tool update-shell` and open a new Terminal window.
 
 ## Troubleshooting
 
@@ -97,12 +97,12 @@ Run `notion-search`, choose Uninstall, then **Service** to keep the index and mo
 Notion Desktop ── Cmd+K ──> /api/v3/search request
         │  (intercepted over the DevTools port)
         ▼
-notion_service.py ──> search_engine.py ──> answer in Notion's own response format
+service.py ──> engine.py ──> answer in Notion's own response format
         │                    │
         │                    ├─ FTS5 index   (exact words)
         │                    └─ vectors      (EmbeddingGemma 2, MLX, 8-bit)
         ▼
-notion_indexer.py: reads Notion's local database (read-only),
+indexer.py: reads Notion's local database (read-only),
 re-embeds only the pages whose text changed
 ```
 
@@ -122,20 +122,20 @@ The index and the model live in `~/Library/Application Support/NotionSearch`. Al
 Measured on an M2 MacBook Air with a 836-page workspace (956 chunks):
 
 - Search: about 20 to 50 ms per query, including the model call. The first query after a restart takes about 250 ms.
-- Memory: about 740 MB resident, most of it the model in 8-bit form (280 MB) and Python.
+- Memory: about 790 MB resident, most of it the model in 8-bit form (280 MB) and Python.
 - Full index build: 2 to 3 minutes. Later updates re-embed only changed pages and take about a second.
 - Idle: no measurable CPU, and no network traffic beyond local connections to Notion.
 
 ## Limitations
 
-- Apple Silicon only (MLX).
+- Apple Silicon Macs only (MLX), and Notion Desktop for Mac. It does not work with Notion in a browser.
 - Pages must be cached by Notion Desktop to be searchable.
 - Notion restarts once when it is opened without the debug port.
 - Database properties and attachment contents are not searched.
 
 ## Credits
 
-- **[DigUp](https://github.com/ARahim3/DigUp)** by ARahim3 (MIT). DigUp, which searches local files with the same model, shaped several decisions here: the model card's query and document prompts, scoring a hit against the whole score distribution for a query instead of a fixed cutoff, storing a model fingerprint in the index so a model change triggers a rebuild, and the tested `mlx-vlm` version that supports the model.
+- **[DigUp](https://github.com/ARahim3/DigUp)** by ARahim3 (MIT). DigUp, which searches local files with the same model, shaped several decisions here: the model card's query and document prompts, scoring a hit against the whole score distribution for a query instead of a fixed cutoff, storing a model fingerprint in the index so a model change triggers a rebuild, and the choice of `mlx-vlm` release that supports the model.
 - **[EmbeddingGemma 2](https://huggingface.co/google/embeddinggemma-2)** by Google DeepMind (Apache 2.0).
 - **[MLX](https://github.com/ml-explore/mlx)** by Apple and **[mlx-vlm](https://github.com/Blaizzy/mlx-vlm)** by Blaizzy.
 - **SQLite FTS5** for exact-word search.
