@@ -114,22 +114,24 @@ class Engine:
         return best
 
     def snippet(self, pid, terms, chunk):
-        """~200 characters of the page: the short block that matches the query if there is one, else the place
-        where the query words cluster, else the best-matching chunk."""
+        """The single block of the page that best matches the query (one line, never a run of neighbours, which on a
+        page like a password list would print unrelated secrets). Empty when no block holds a query word."""
         body = self.text[pid][2]
-        kind, label = self.label_match(self.text[pid][3], terms)
-        at = body.lower().find(label.lower()) if kind else -1
-        if at >= 0:
-            return body[at:at + 200].replace("\n", " ") + "..."
         pat = re.compile("|".join(r"\b" + re.escape(t) for t in terms), re.I)
-        found = [(m.start(), m.group().lower()) for m in pat.finditer(body)]
-        if not found:
-            return (chunk or self.pages[pid][1])[:240]
-        rarity = {t: 1 / self.df(t) for _, t in found}  # a word few pages have beats a common one
-        at = max((p for p, _ in found),
-                 key=lambda p: sum(rarity[t] for t in {w for q, w in found if p <= q < p + 200}))
-        start = max(0, at - 40)
-        return ("..." if start else "") + body[start:start + 200].replace("\n", " ") + "..."
+        best, best_key = None, None
+        for line in body.split("\n"):
+            words = {m.group().lower() for m in pat.finditer(line)}
+            if words:  # a word few pages have beats a common one; among equals the shorter, more specific block wins
+                key = (sum(1 / self.df(w) for w in words), -len(line))
+                if best_key is None or key > best_key:
+                    best, best_key = line, key
+        if best is None:  # the page matched by title or by meaning: show no body text (Notion does the same)
+            return ""
+        if len(best) > 160:  # a long block: show the stretch around the first match
+            at = pat.search(best).start()
+            start = max(0, at - 50)
+            best = ("..." if start else "") + best[start:start + 160] + "..."
+        return best
 
     # ── Notion's response format ─────────────────────────────────────────────
 
