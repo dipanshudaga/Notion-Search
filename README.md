@@ -17,15 +17,6 @@ anything you only remember by its meaning. Notion Search keeps the same Cmd+K bo
 instead. It indexes every page in your workspace and ranks each query by exact words and by meaning together. Each
 result opens at the block that matched, with Notion's blue highlight.
 
-## What you can find
-
-- A saved link by a word from its address: `capturea` finds `captureatrip.com`.
-- A toggle titled "Github" inside a password page, when you search `github`.
-- A page by what it is about: `instagram designers` finds your list of designer profiles.
-- Text buried in the middle of a long page, a table cell, or a nested bullet.
-
-It reads each page's full text together with the page title and its folder path, so a match knows where it lives.
-
 ## Install
 
 You need a Mac with Apple Silicon, Notion Desktop in `/Applications`, and [uv](https://docs.astral.sh/uv/getting-started/installation/)
