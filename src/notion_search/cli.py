@@ -86,7 +86,7 @@ class Checklist:
         if self.drawn:
             print(f"\033[{len(self.names) + 2}A", end="")
         for name, st, det in zip(self.names, self.state, self.detail):
-            name = f"{name:<24}"
+            name = f"{name:<30}"
             line = {"done": f"{G}✓{N} {name} {D}{det}{N}", "active": f"{G}■{N} {B}{name}{N} {det}",
                     "fail": f"{R}✗{N} {name} {R}{det}{N}"}.get(st, f"{D}□ {name}{N}")
             print(f"\033[K{RAIL}  {line}")
@@ -198,8 +198,8 @@ def do_install():
     stop_service()
     subprocess.run(["pkill", "-f", "notion_search.service"], capture_output=True)
     temporary = running_from_uvx()
-    names = ["Language model", "Index your pages", "Background service"]
-    ui = Checklist("installer", (["The notion-search command"] if temporary else []) + names)
+    names = ["Downloading the model", "Indexing pages", "Starting background services"]
+    ui = Checklist("installer", (["Installing the notion-search command"] if temporary else []) + names)
     step, python = 0, sys.executable
 
     if temporary:  # started with `uvx notion-search install`: put the command and its environment somewhere permanent
@@ -264,7 +264,7 @@ def do_reindex():
     stop_service()
     for f in DATA.glob("index.db*"):
         f.unlink()
-    ui = Checklist("rebuilding the index", ["Index your pages", "Background service"])
+    ui = Checklist("rebuilding the index", ["Indexing pages", "Starting background services"])
     ui.start(0)
     if not run_service(ui, "--index"):
         return ui.failed()
