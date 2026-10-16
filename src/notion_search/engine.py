@@ -10,7 +10,7 @@ from functools import lru_cache
 import numpy as np
 
 from .embedder import DIM, QUERY_LEN, Embedder, query_prompt
-from .indexer import open_index, snapshot, store
+from .indexer import open_index, snapshot, store, walk
 
 HL_OPEN, HL_CLOSE = "<gzkNfoUU>", "</gzkNfoUU>"  # Notion's own highlight markers; <b> would show up as text
 COVER_BONUS, TITLE_BONUS = 0.05, 0.03  # pages holding ALL the query words (title counts extra) beat partial matches
@@ -99,7 +99,7 @@ class Engine:
             if pid == current:
                 scores[pid] += CURRENT_BONUS
         best = sorted((p for p in scores if p in self.pages), key=scores.get, reverse=True)[:limit]
-        return [(pid, self.snippet(pid, terms, chunks.get(pid))) for pid in best]
+        return [(pid, *self.snippet(pid, terms, chunks.get(pid))) for pid in best]
 
     @staticmethod
     def label_match(labels, terms):
@@ -116,22 +116,21 @@ class Engine:
     def snippet(self, pid, terms, chunk):
         """The single block of the page that best matches the query (one line, never a run of neighbours, which on a
         page like a password list would print unrelated secrets). Empty when no block holds a query word."""
-        body = self.text[pid][2]
         pat = re.compile("|".join(r"\b" + re.escape(t) for t in terms), re.I)
-        best, best_key = None, None
-        for line in body.split("\n"):
+        best, best_key, best_id = None, None, None
+        for bid, line in walk(self.snap.blocks[pid], self.snap.blocks):
             words = {m.group().lower() for m in pat.finditer(line)}
             if words:  # a word few pages have beats a common one; among equals the shorter, more specific block wins
                 key = (sum(1 / self.df(w) for w in words), -len(line))
                 if best_key is None or key > best_key:
-                    best, best_key = line, key
+                    best, best_key, best_id = line, key, bid
         if best is None:  # the page matched by title or by meaning: show no body text (Notion does the same)
-            return ""
+            return "", None
         if len(best) > 160:  # a long block: show the stretch around the first match
             at = pat.search(best).start()
             start = max(0, at - 50)
             best = ("..." if start else "") + best[start:start + 160] + "..."
-        return best
+        return best, best_id
 
     # ── Notion's response format ─────────────────────────────────────────────
 
@@ -149,12 +148,14 @@ class Engine:
         snap, results, terms = self.snap, [], self.terms(text)
         record_map = {"block": {}, "collection": {}, "space": {}}
         default_space = next(iter(snap.spaces), None)
-        for pid, snip in self.search(text, limit, current):
+        for pid, snip, bid in self.search(text, limit, current):
             block = snap.blocks.get(pid)
             if not block:
                 continue
             space_id = block["space_id"] or default_space
             record_map["block"][pid] = {"role": "editor", "value": block}
+            if bid:  # a hit inside the page: Notion opens the page at that block
+                record_map["block"][bid] = {"role": "editor", "value": snap.blocks[bid]}
             parent = block["parent_id"]
             if block["parent_table"] == "collection" and parent in snap.cols:
                 record_map["collection"][parent] = {"role": "editor", "value": snap.cols[parent]}
@@ -162,12 +163,11 @@ class Engine:
                 record_map["block"][parent] = {"role": "editor", "value": snap.blocks[parent]}
             if space_id in snap.spaces:
                 record_map["space"][space_id] = {"role": "editor", "value": snap.spaces[space_id]}
-            name = self.pages[pid][0]
-            hl_title = self.highlight(name, terms)
+            hl_title = self.highlight(snip if bid else self.pages[pid][0], terms)  # Notion titles a block hit by the block
             results.append({
-                "id": pid, "table": "block", "spaceId": space_id, "score": 1000 - len(results),
+                "id": bid or pid, "table": "block", "spaceId": space_id, "score": 1000 - len(results),
                 "sources": [], "isSurrogateCollection": False, "collectionId": None,
-                "highlight": {"title": hl_title, "text": self.highlight(snip, terms)},
+                "highlight": {"title": hl_title, "text": "" if bid else self.highlight(snip, terms)},
                 "highlights": {"titleHighlight": hl_title, "textHighlights": []},  # newer shape Notion's cloud sends
             })
         return {"results": results, "recordMap": record_map, "total": len(results), "trackEventProperties": {}}
@@ -182,5 +182,5 @@ if __name__ == "__main__":  # python -m notion_search.engine "query" ...: quick 
         found = engine.search(q)
         ms = (time.perf_counter() - t) * 1000
         print(f"\n{q!r}: {len(found)} results in {ms:.1f} ms")
-        for pid, _ in found:
+        for pid, *_ in found:
             print("  -", engine.pages[pid][0])

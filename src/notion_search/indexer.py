@@ -129,10 +129,9 @@ def _crumbs(page, blocks, cols):
     return " / ".join(reversed(out))
 
 
-def _lines(page, blocks):
-    """Every text block under the page, in reading order, plus the short ones (toggle and heading titles, labels).
-    Child pages are their own documents."""
-    out, labels, seen, stack = [], [], set(), list(reversed(page["content"]))
+def walk(page, blocks):
+    """Every text block under the page, in reading order, as (block_id, text). Child pages are their own documents."""
+    seen, stack = set(), list(reversed(page["content"]))
     while stack:
         bid = stack.pop()
         b = blocks.get(bid)
@@ -141,11 +140,14 @@ def _lines(page, blocks):
         seen.add(bid)
         text = block_text(b, blocks)
         if text:
-            out.append(text)
-            if len(text) <= 50 and len(text.split()) <= 6 and "http" not in text:
-                labels.append(text)
+            yield bid, text
         stack.extend(reversed(b["content"]))
-    return out, labels
+
+
+def _lines(page, blocks):
+    """The page's text blocks in reading order, plus the short ones (toggle and heading titles, labels)."""
+    out = [text for _, text in walk(page, blocks)]
+    return out, [t for t in out if len(t) <= 50 and len(t.split()) <= 6 and "http" not in t]
 
 
 def _chunks(lines):
