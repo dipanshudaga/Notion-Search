@@ -173,9 +173,17 @@ def running_from_uvx():
     return bool(cache) and sys.prefix.startswith(cache)
 
 
+def newest_known_version():
+    """The newest release on PyPI, or this copy's own version when PyPI is unreachable. A uvx run may use an old cached
+    copy of the program, and installing that version permanently would be a downgrade."""
+    mine = importlib.metadata.version("notion-search")
+    latest = latest_version()
+    return latest if latest and version_tuple(latest) > version_tuple(mine) else mine
+
+
 def install_program(ui, spec=None):
     """Install the notion-search command permanently with `uv tool`, showing a spinner. Returns the new Python path."""
-    spec = spec or os.environ.get("NOTION_SEARCH_SPEC") or f"notion-search=={importlib.metadata.version('notion-search')}"
+    spec = spec or os.environ.get("NOTION_SEARCH_SPEC") or f"notion-search=={newest_known_version()}"
     proc = subprocess.Popen(["uv", "tool", "install", "--python", "3.12", "--force", "--quiet", "--refresh-package", "notion-search", spec],
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     frames, f, t = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏", 0, time.time()
@@ -469,7 +477,7 @@ COMMANDS = {
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "menu"
     permanent = Path(uv_output("tool", "dir") or "/nonexistent") / "notion-search" / "bin" / "python"
-    if cmd not in ("install", "update") and PLIST.exists() and permanent.exists() and running_from_uvx():
+    if cmd != "install" and PLIST.exists() and permanent.exists() and running_from_uvx():
         os.execv(str(permanent), [str(permanent), "-m", "notion_search.cli", *sys.argv[1:]])  # use the installed copy
     try:
         if cmd == "menu" and TTY and sys.stdin.isatty():
