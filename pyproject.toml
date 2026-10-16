@@ -40,4 +40,4 @@ Releases = "https://github.com/dipanshudaga/Notion-Search/releases"
 Issues = "https://github.com/dipanshudaga/Notion-Search/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["notion_search"]
+packages = ["src/notion_search"]
