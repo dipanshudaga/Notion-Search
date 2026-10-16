@@ -176,7 +176,7 @@ def running_from_uvx():
 def install_program(ui, spec=None):
     """Install the notion-search command permanently with `uv tool`, showing a spinner. Returns the new Python path."""
     spec = spec or os.environ.get("NOTION_SEARCH_SPEC") or f"notion-search=={importlib.metadata.version('notion-search')}"
-    proc = subprocess.Popen(["uv", "tool", "install", "--python", "3.12", "--force", "--quiet", spec],
+    proc = subprocess.Popen(["uv", "tool", "install", "--python", "3.12", "--force", "--quiet", "--refresh-package", "notion-search", spec],
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     frames, f, t = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏", 0, time.time()
     while proc.poll() is None:
