@@ -1,8 +1,8 @@
 .venv/
 __pycache__/
 .DS_Store
-_old/
 DigUp/
-*.log
 dist/
+uv.lock
+*.log
 *.egg-info/
