@@ -13,7 +13,7 @@ import tty
 import urllib.request
 from pathlib import Path
 
-from .embedder import DATA
+from .embedder import DATA, MODEL_DIR
 
 LABEL = "com.notionsearch.service"
 PLIST = Path.home() / "Library/LaunchAgents" / f"{LABEL}.plist"
@@ -143,21 +143,37 @@ def run_service(ui, flag, python=None):
 
 # ── commands ──────────────────────────────────────────────────────────────────
 
-def write_plist(python):
-    PLIST.parent.mkdir(parents=True, exist_ok=True)
-    LOG.parent.mkdir(parents=True, exist_ok=True)
-    PLIST.write_text(f"""<?xml version="1.0" encoding="UTF-8"?>
+def render_plist(python):
+    """The LaunchAgent. It runs the `notion-search serve` script, so macOS names the background item after the app."""
+    program = Path(python).parent / "notion-search"
+    args = f"<string>{program}</string><string>serve</string>" if program.exists() else \
+           f"<string>{python}</string><string>-u</string><string>-m</string><string>notion_search.service</string>"
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>{LABEL}</string>
-  <key>ProgramArguments</key><array><string>{python}</string><string>-u</string><string>-m</string><string>notion_search.service</string></array>
+  <key>ProgramArguments</key><array>{args}</array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>10</integer>
   <key>StandardOutPath</key><string>{LOG}</string>
   <key>StandardErrorPath</key><string>{LOG}</string>
 </dict></plist>
-""")
+"""
+
+
+def register_service(python):
+    """Start the service. If the registration is unchanged and loaded, just restart it: re-registering the same
+    LaunchAgent is what makes macOS show its "App Background Activity" notification again."""
+    text = render_plist(python)
+    loaded = launchctl("print", f"{DOMAIN}/{LABEL}").returncode == 0
+    if loaded and PLIST.exists() and PLIST.read_text() == text:
+        return launchctl("kickstart", "-k", f"{DOMAIN}/{LABEL}").returncode == 0
+    stop_service()
+    PLIST.parent.mkdir(parents=True, exist_ok=True)
+    LOG.parent.mkdir(parents=True, exist_ok=True)
+    PLIST.write_text(text)
+    return launchctl("bootstrap", DOMAIN, str(PLIST)).returncode == 0
 
 
 def uv_output(*args):
@@ -200,45 +216,79 @@ def install_program(ui, spec=None):
     return str(Path(uv_output("tool", "dir")) / "notion-search" / "bin" / "python")
 
 
+def needs_model():
+    return not ((MODEL_DIR / "model.safetensors").exists() and (MODEL_DIR / "tokenizer.json").exists())
+
+
+def needs_index():
+    """True when there is no index yet, or it was built by a version with a different layout or model."""
+    from .indexer import FINGERPRINT
+
+    if not (DATA / "index.db").exists():
+        return True
+    try:
+        with sqlite3.connect(DATA / "index.db") as db:
+            row = db.execute("SELECT v FROM meta WHERE k = 'fingerprint'").fetchone()
+    except sqlite3.Error:
+        return True
+    return not row or row[0] != FINGERPRINT
+
+
+def plan_steps(temporary, restarting):
+    """The steps this run really needs: an update on a working install is often just a service restart."""
+    steps = []
+    if temporary:
+        steps.append(("program", "Installing the notion-search command"))
+    if needs_model():
+        steps.append(("model", "Downloading the model"))
+    if needs_index():
+        steps.append(("index", "Indexing pages"))
+    steps.append(("service", "Restarting background services" if restarting else "Starting background services"))
+    return steps
+
+
 def do_install():
     if sys.platform != "darwin" or os.uname().machine != "arm64":
         return fail("Needs a Mac with Apple Silicon (MLX).")
     if not Path("/Applications/Notion.app").exists():
         return fail("Install Notion Desktop first (/Applications/Notion.app).")
-    stop_service()
-    subprocess.run(["pkill", "-f", "notion_search.service"], capture_output=True)
+    restarting = PLIST.exists()
     temporary = running_from_uvx()
-    names = ["Downloading the model", "Indexing pages", "Starting background services"]
-    ui = Checklist("installer", (["Installing the notion-search command"] if temporary else []) + names)
-    step, python = 0, sys.executable
+    steps = plan_steps(temporary, restarting)
+    if any(key == "index" for key, _ in steps):  # the old service must not write the index while it is rebuilt
+        stop_service()
+        subprocess.run(["pkill", "-f", "notion_search.service"], capture_output=True)
+    updating = bool(os.environ.get("NS_UPDATING"))
+    ui = Checklist("update" if updating else "installer", [name for _, name in steps])
+    python = sys.executable
 
-    if temporary:  # started with `uvx notion-search install`: put the command and its environment somewhere permanent
-        ui.start(step, "uv puts the program in its own environment")
-        python = install_program(ui)
-        if not python:
-            return ui.failed()
-        ui.done(step)
-        step += 1
+    for i, (key, _) in enumerate(steps):
+        if key == "program":  # started with `uvx notion-search install`: put the command somewhere permanent
+            ui.start(i, "uv puts the program in its own environment")
+            python = install_program(ui)
+            if not python:
+                return ui.failed()
+        elif key == "model":
+            ui.start(i, "Google EmbeddingGemma 2, downloaded from Hugging Face")
+            if not run_service(ui, "--download", python):
+                return ui.failed("download failed: check your internet")
+        elif key == "index":
+            ui.start(i, "Reading your Notion pages")
+            if not run_service(ui, "--index", python):
+                return ui.failed()
+        else:
+            ui.start(i, "Registering the service that starts at every login")
+            if not register_service(python):
+                return ui.failed()
+        ui.done(i)
 
-    ui.start(step, "Google EmbeddingGemma 2, downloaded from Hugging Face")
-    if not run_service(ui, "--download", python):
-        return ui.failed("download failed: check your internet")
-    ui.done(step)
-
-    ui.start(step + 1)
-    if not run_service(ui, "--index", python):
-        return ui.failed()
-    ui.done(step + 1)
-
-    ui.start(step + 2, "Registering the service that starts at every login")
-    write_plist(python)
-    if launchctl("bootstrap", DOMAIN, str(PLIST)).returncode:
-        return ui.failed()
-    ui.done(step + 2)
-
-    out(f"{D}└{N}  {G}{B}All set.{N} Open Notion and press {B}Cmd+K{N}.")
-    out(f"   {D}If Notion was already open, it restarts once so the search can attach.{N}")
-    out(f"   {D}Manage it any time with:{N} notion-search")
+    version = importlib.metadata.version("notion-search")
+    if updating:
+        out(f"{D}└{N}  {G}{B}Updated to {version}.{N} Notion Search is running.")
+    else:
+        out(f"{D}└{N}  {G}{B}All set.{N} Open Notion and press {B}Cmd+K{N}.")
+        out(f"   {D}If Notion was already open, it restarts once so the search can attach.{N}")
+        out(f"   {D}Manage it any time with:{N} notion-search")
     if temporary and (bin_dir := uv_output("tool", "dir", "--bin")) and bin_dir not in os.environ.get("PATH", "").split(":"):
         out(f"   {Y}!{N} To use that command, run {B}uv tool update-shell{N} and open a new Terminal window.")
     out()
@@ -269,6 +319,7 @@ def do_update():
             return ui.failed()
         ui.done(0)
         out(f"{D}└{N}  {G}Updated.{N} Now refreshing the service with the new version.\n")
+        os.environ["NS_UPDATING"] = "1"
         os.execv(python, [python, "-m", "notion_search.cli", "install"])  # the new code runs the setup
     if newer and tool:
         out(f"{RAIL}  {Y}!{N} Version {latest} is out (you have {current}). Upgrade with: {B}pipx upgrade notion-search{N}")
@@ -316,7 +367,7 @@ def do_reindex():
         return ui.failed()
     ui.done(0)
     ui.start(1)
-    if launchctl("bootstrap", DOMAIN, str(PLIST)).returncode:
+    if not register_service(sys.executable):
         return ui.failed()
     ui.done(1)
     out(f"{D}└{N}  {G}{B}Done.{N} The service is running again.\n")
@@ -366,8 +417,8 @@ def confirm_uninstall():
     if not (TTY and sys.stdin.isatty()):
         out("Run with --yes to remove Notion Search without a prompt.")
         return False
-    out(f"{RAIL}  This removes the background service, the index, the model (about 900 MB)")
-    out(f"{RAIL}  and the notion-search command. Notion itself is not touched.")
+    out(f"{RAIL}  This removes the background service, the index, the model and the notion-search")
+    out(f"{RAIL}  command. Notion itself is not touched.")
     return input(f"{D}└{N}  Remove everything? {D}[y/N]{N} ").strip().lower() in ("y", "yes")
 
 
@@ -453,8 +504,8 @@ def menu():
         header()
         if label in ("Uninstall", "Remove"):
             sure = pick("Remove Notion Search completely?", [
-                ("Yes, remove", "The service, index, model (about 900 MB) and the command"),
-                ("Cancel", "Go back")])
+                ("Yes, remove", ""),
+                ("Cancel", "")])
             if sure != 0:
                 continue
             header()
@@ -467,7 +518,20 @@ def menu():
     print("\033[H\033[2J", end="")
 
 
+def serve():
+    """Run the background service in the foreground (this is what the LaunchAgent starts)."""
+    import asyncio
+
+    from .service import main as service_main
+
+    try:
+        asyncio.run(service_main())
+    except KeyboardInterrupt:
+        os._exit(130)
+
+
 COMMANDS = {
+    "serve": serve,
     "install": do_install, "update": do_update, "status": do_status, "restart": do_restart, "reindex": do_reindex,
     "uninstall": lambda: do_uninstall(keep_data="--keep-data" in sys.argv) if confirm_uninstall() else out("Nothing was removed."),
     "logs": lambda: os.execvp("tail", ["tail", "-f", str(LOG)]),
