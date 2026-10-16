@@ -375,9 +375,9 @@ def pick(title, options):
             for i, (label, desc) in enumerate(options):
                 desc = desc if len(desc) <= width else desc[:width - 1] + "…"
                 if i == sel:
-                    print(f"{RAIL}  {G}■{N} {B}{label:<10}{N} {D}{desc}{N}")
+                    print(f"{RAIL}  {G}■{N} {B}{label:<11}{N} {D}{desc}{N}")
                 else:
-                    print(f"{RAIL}  {D}□ {label:<10} {desc}{N}")
+                    print(f"{RAIL}  {D}□ {label:<11} {desc}{N}")
             print(f"{D}└{N}  {D}↑↓ move · enter select · q quit{N}", flush=True)
             key = read_key()
             if key == "up":
@@ -404,21 +404,30 @@ def wait_key():
         termios.tcsetattr(fd, termios.TCSADRAIN, saved)
 
 
+def menu_options():
+    """Only what makes sense right now: a full menu once installed, a short one before (or after a partial removal)."""
+    if PLIST.exists():
+        return [("Update", "Get the newest version and refresh the service"),
+                ("Status", "Is it running, and is Notion hooked?"),
+                ("Restart", "Restart the background service"),
+                ("Reindex", "Re-read all your Notion pages from scratch"),
+                ("Uninstall", "Remove the service (Notion is never touched)"),
+                ("Quit", "Close this menu")]
+    options = [("Install", "Set up the search service and index your Notion")]
+    if DATA.exists():  # something is left over from an earlier install
+        options.append(("Remove", "Delete the index, the model and the notion-search command"))
+    return options + [("Quit", "Close this menu")]
+
+
 def menu():
     while True:
-        first = ("Update", "Get the newest version and refresh the service") if PLIST.exists() \
-            else ("Install", "Set up the search service and index your Notion")
-        choice = pick("What would you like to do?", [
-            first,
-            ("Status", "Is it running, and is Notion hooked?"),
-            ("Restart", "Restart the background service"),
-            ("Reindex", "Re-read all your Notion pages from scratch"),
-            ("Uninstall", "Remove the service (Notion is never touched)"),
-            ("Quit", "Close this menu")])
-        if choice in (None, 5):
+        options = menu_options()
+        choice = pick("What would you like to do?", options)
+        label = options[choice][0] if choice is not None else "Quit"
+        if label == "Quit":
             break
         header()
-        if choice == 4:
+        if label == "Uninstall":
             sub = pick("What should be removed?", [
                 ("Service", "The background service only; keep the index and model"),
                 ("Everything", "Also the index, the model and the notion-search command"),
@@ -429,8 +438,12 @@ def menu():
             do_uninstall(purge=sub == 1)
             if sub == 1:  # the command is gone: nothing left to show a menu for
                 return
+        elif label == "Remove":
+            do_uninstall(purge=True)
+            return
         else:
-            [do_update if PLIST.exists() else do_install, do_status, do_restart, do_reindex][choice]()
+            {"Install": do_install, "Update": do_update, "Status": do_status,
+             "Restart": do_restart, "Reindex": do_reindex}[label]()
         wait_key()
     print("\033[H\033[2J", end="")
 
@@ -446,7 +459,7 @@ def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "menu"
     try:
         if cmd == "menu" and TTY and sys.stdin.isatty():
-            do_install() if not PLIST.exists() else menu()  # first run: just set everything up
+            do_install() if not (PLIST.exists() or DATA.exists()) else menu()  # very first run: just set everything up
         elif cmd in COMMANDS:
             COMMANDS[cmd]()
         else:
