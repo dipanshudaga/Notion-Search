@@ -273,6 +273,7 @@ def do_update():
 
 def do_status():
     out(f"{RAIL}  {state_line()}")
+    out(f"{RAIL}  {D}notion-search {importlib.metadata.version('notion-search')}{N}")
     if PLIST.exists():
         ps = subprocess.run(["ps", "-axo", "command="], capture_output=True, text=True).stdout
         notion = "/Applications/Notion.app/Contents/MacOS/Notion"
@@ -323,28 +324,43 @@ def program_remover():
     return None
 
 
-def do_uninstall(purge=False):
-    """Remove the service. With purge, also the index, the model and the notion-search command itself."""
+def do_uninstall(keep_data=False):
+    """Remove Notion Search. By default everything: the service, index, model, log, old installer folders, uv's cached
+    copies and the notion-search command. keep_data=True removes only the service."""
     stop_service()
     PLIST.unlink(missing_ok=True)
     ok("Service removed (Notion itself was never modified)")
     remover = program_remover()
-    if not purge:
-        out(f"{RAIL}  {D}Kept the index and model: install again anytime.{N}")
-        if remover:
-            out(f"{RAIL}  {D}To remove the command too, choose Everything, or run:{N} {' '.join(remover)}")
+    if keep_data:
+        out(f"{RAIL}  {D}Kept the index, the model and the command: install again anytime.{N}")
         return
     import shutil
 
-    shutil.rmtree(DATA, ignore_errors=True)
+    for path in (DATA, Path.home() / ".notion-search"):  # the second is where the old one-line installer put files
+        shutil.rmtree(path, ignore_errors=True)
     LOG.unlink(missing_ok=True)
+    (Path.home() / ".local/bin/notion-search").unlink(missing_ok=True) if not remover else None
     ok("Index, model and log deleted")
+    if shutil.which("uv"):
+        subprocess.run(["uv", "cache", "clean", "notion-search"], capture_output=True)  # uvx's temporary copies
     if remover:  # last on purpose: this deletes the environment this process runs from
         done = subprocess.run(remover, capture_output=True, text=True)
         ok("The notion-search command removed") if done.returncode == 0 else fail(f"Could not remove the command: run {' '.join(remover)}")
     else:
         out(f"{RAIL}  {D}Remove the program with the tool you installed it with (pip uninstall notion-search).{N}")
     out(f"{D}└{N}  {G}{B}Notion Search is gone.{N} Notion itself was never modified.")
+
+
+def confirm_uninstall():
+    """Ask once, in plain words. Returns True to go ahead."""
+    if "--yes" in sys.argv:
+        return True
+    if not (TTY and sys.stdin.isatty()):
+        out("Run with --yes to remove Notion Search without a prompt.")
+        return False
+    out(f"{RAIL}  This removes the background service, the index, the model (about 900 MB)")
+    out(f"{RAIL}  and the notion-search command. Notion itself is not touched.")
+    return input(f"{D}└{N}  Remove everything? {D}[y/N]{N} ").strip().lower() in ("y", "yes")
 
 
 # ── menu (clack-style) ────────────────────────────────────────────────────────
@@ -411,11 +427,11 @@ def menu_options():
                 ("Status", "Is it running, and is Notion hooked?"),
                 ("Restart", "Restart the background service"),
                 ("Reindex", "Re-read all your Notion pages from scratch"),
-                ("Uninstall", "Remove the service (Notion is never touched)"),
+                ("Uninstall", "Remove everything (Notion is never touched)"),
                 ("Quit", "Close this menu")]
     options = [("Install", "Set up the search service and index your Notion")]
     if DATA.exists():  # something is left over from an earlier install
-        options.append(("Remove", "Delete the index, the model and the notion-search command"))
+        options.append(("Remove", "Delete the index, the model and the command"))
     return options + [("Quit", "Close this menu")]
 
 
@@ -427,20 +443,15 @@ def menu():
         if label == "Quit":
             break
         header()
-        if label == "Uninstall":
-            sub = pick("What should be removed?", [
-                ("Service", "The background service only; keep the index and model"),
-                ("Everything", "Also the index, the model and the notion-search command"),
+        if label in ("Uninstall", "Remove"):
+            sure = pick("Remove Notion Search completely?", [
+                ("Yes, remove", "The service, index, model (about 900 MB) and the command"),
                 ("Cancel", "Go back")])
-            if sub in (None, 2):
+            if sure != 0:
                 continue
             header()
-            do_uninstall(purge=sub == 1)
-            if sub == 1:  # the command is gone: nothing left to show a menu for
-                return
-        elif label == "Remove":
-            do_uninstall(purge=True)
-            return
+            do_uninstall()
+            return  # the command is gone: nothing left to show a menu for
         else:
             {"Install": do_install, "Update": do_update, "Status": do_status,
              "Restart": do_restart, "Reindex": do_reindex}[label]()
@@ -450,13 +461,16 @@ def menu():
 
 COMMANDS = {
     "install": do_install, "update": do_update, "status": do_status, "restart": do_restart, "reindex": do_reindex,
-    "uninstall": lambda: do_uninstall("--purge" in sys.argv),
+    "uninstall": lambda: do_uninstall(keep_data="--keep-data" in sys.argv) if confirm_uninstall() else out("Nothing was removed."),
     "logs": lambda: os.execvp("tail", ["tail", "-f", str(LOG)]),
 }
 
 
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "menu"
+    permanent = Path(uv_output("tool", "dir") or "/nonexistent") / "notion-search" / "bin" / "python"
+    if cmd not in ("install", "update") and PLIST.exists() and permanent.exists() and running_from_uvx():
+        os.execv(str(permanent), [str(permanent), "-m", "notion_search.cli", *sys.argv[1:]])  # use the installed copy
     try:
         if cmd == "menu" and TTY and sys.stdin.isatty():
             do_install() if not (PLIST.exists() or DATA.exists()) else menu()  # very first run: just set everything up

@@ -10,7 +10,7 @@ Notion Search keeps the same Cmd+K box and replaces what answers it. Every page 
 uvx notion-search
 ```
 
-That one command does everything: it installs the program, downloads the model, indexes your pages and starts the background service. Afterwards, run `notion-search` any time to open the menu.
+That one command does everything: it installs the program, downloads the model, indexes your pages and starts the background service. Afterwards, run `notion-search` any time to open the menu. (Running `uvx notion-search` again also works: it hands over to the installed copy.)
 
 No `uv` yet? Use the one-line installer below. It installs `uv` for you.
 
@@ -70,9 +70,9 @@ Run `notion-search` in Terminal for an arrow-key menu:
 | Status | Shows whether the service is running and Notion is hooked |
 | Restart | Restarts the background service |
 | Reindex | Rebuilds the whole index from scratch (about 2 to 3 minutes) |
-| Uninstall | Removes the service, or everything: the index, the model and the command itself |
+| Uninstall | After you confirm, removes everything: the service, index, model and the command itself |
 
-Before anything is installed, the menu is short: Install and Quit. The same actions work as commands: `notion-search install`, `update`, `status`, `restart`, `reindex`, `uninstall [--purge]`, and `logs` for debugging. If the command is not found, run `uv tool update-shell` and open a new Terminal window.
+Before anything is installed, the menu is short: Install and Quit. The same actions work as commands: `notion-search install`, `update`, `status`, `restart`, `reindex`, `uninstall [--keep-data] [--yes]`, and `logs` for debugging. If the command is not found, run `uv tool update-shell` and open a new Terminal window.
 
 ## Troubleshooting
 
@@ -83,7 +83,9 @@ Before anything is installed, the menu is short: Install and Quit. The same acti
 
 ## Uninstall
 
-Run `notion-search`, choose Uninstall, then **Service** to keep the index and model or **Everything** to also delete the index, the 900 MB model and the `notion-search` command itself, so nothing is left behind. Notion itself is never modified, so it behaves exactly as before.
+Run `notion-search`, choose **Uninstall**, and confirm. It removes everything Notion Search put on your Mac: the background service, the index, the 900 MB model, the log, uv's cached copies and the `notion-search` command itself (about 1.7 GB in all). Notion itself is never modified, so it behaves exactly as before. `uv` stays, because other tools may use it.
+
+From a script: `notion-search uninstall --yes` skips the question, and `--keep-data` removes only the service and keeps the index, model and command.
 
 ## Privacy and security
 
