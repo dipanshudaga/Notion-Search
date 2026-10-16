@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "notion-search"
-version = "0.1.9"
+version = "0.1.10"
 description = "Offline, private hybrid search (exact words + meaning) for Notion Desktop's Cmd+K, running on your Mac"
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
@@ -40,4 +40,4 @@ Releases = "https://github.com/dipanshudaga/Notion-Search/releases"
 Issues = "https://github.com/dipanshudaga/Notion-Search/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/notion_search"]
+packages = ["notion_search"]
