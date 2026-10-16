@@ -47,7 +47,7 @@ The same actions work as commands: `notion-search update`, `status`, `restart`, 
 Page titles and folder paths, and the full text of every page: toggles, columns, lists, callouts and table cells.
 Long pages are split into chunks of about 1,500 characters, so a match deep inside a page still finds it.
 
-Not searched: database properties (status, tags, dates) and the contents of PDFs, images and other files. Notion
+Database properties such as Author, tags and status are searched too. Not searched: dates, people, and the contents of PDFs, images and other files. Notion
 Desktop must have opened a page at least once before it can be indexed. New and edited pages are picked up within
 about 15 seconds.
 

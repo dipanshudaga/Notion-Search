@@ -15,7 +15,7 @@ from .embedder import DATA, MODEL, doc_prompt
 
 NOTION_DB = Path.home() / "Library/Application Support/Notion/notion.db"
 INDEX_DB = DATA / "index.db"
-FINGERPRINT = f"{MODEL} prompts1 chunks1500 len512 q8g128 labels1"  # change = every vector is recomputed on next start
+FINGERPRINT = f"{MODEL} prompts1 chunks1500 len512 q8g128 labels1 props1"  # change = every vector is recomputed on next start
 PAGE_TYPES = {"page", "collection_view_page"}
 CHUNK_CHARS = 1500  # a long page becomes several chunks, each embedded on its own
 
@@ -66,7 +66,8 @@ def read_notion():
         if r["moved_to_trash_time"] is None:
             cols[r["id"]] = {"id": r["id"], "version": int(r["version"] or 1), "alive": True,
                              "name": _json(r["name"], [[r["id"]]]),
-                             "parent_id": r["parent_id"], "parent_table": r["parent_table"]}
+                             "parent_id": r["parent_id"], "parent_table": r["parent_table"],
+                             "schema": _json(r["schema"], {})}
     blocks = {}
     for r in db.execute("SELECT * FROM block WHERE alive = 1"):
         if r["moved_to_trash_time"] is not None or r["archived_time"] is not None:
@@ -129,8 +130,25 @@ def _crumbs(page, blocks, cols):
     return " / ".join(reversed(out))
 
 
-def walk(page, blocks):
-    """Every text block under the page, in reading order, as (block_id, text). Child pages are their own documents."""
+PROP_TYPES = {"select", "multi_select", "status", "text", "url", "email", "phone_number", "number"}
+
+
+def props(page, cols):
+    """A database row's text properties as [(name, value)], e.g. [("Author", "Voltaire")]. Notion keys them by short ids."""
+    schema = (cols.get(page["parent_id"]) or {}).get("schema", {}) if page["parent_table"] == "collection" else {}
+    out = []
+    for key, spec in schema.items():
+        value = rich(page["properties"].get(key)) if spec.get("type") in PROP_TYPES else ""
+        if value:
+            out.append((spec.get("name", ""), value))
+    return out
+
+
+def walk(page, blocks, cols):
+    """Every text block under the page, in reading order, as (block_id, text); a database row's properties come first
+    with no block id. Child pages are their own documents."""
+    for name, value in props(page, cols):
+        yield None, f"{name}: {value}"
     seen, stack = set(), list(reversed(page["content"]))
     while stack:
         bid = stack.pop()
@@ -144,10 +162,11 @@ def walk(page, blocks):
         stack.extend(reversed(b["content"]))
 
 
-def _lines(page, blocks):
-    """The page's text blocks in reading order, plus the short ones (toggle and heading titles, labels)."""
-    out = [text for _, text in walk(page, blocks)]
-    return out, [t for t in out if len(t) <= 50 and len(t.split()) <= 6 and "http" not in t]
+def _lines(page, blocks, cols):
+    """The page's text blocks in reading order, plus the short ones (toggle and heading titles, property values: labels)."""
+    out = [text for _, text in walk(page, blocks, cols)]
+    labels = [v for _, v in props(page, cols)] + [t for t in out if len(t) <= 50 and len(t.split()) <= 6 and "http" not in t]
+    return out, labels
 
 
 def _chunks(lines):
@@ -175,7 +194,7 @@ def snapshot():
         if b["type"] not in PAGE_TYPES or not name or not live(b["id"]):
             continue
         crumbs = _crumbs(b, blocks, cols)
-        lines, labels = _lines(b, blocks)
+        lines, labels = _lines(b, blocks, cols)
         body = "\n".join(lines)
         docs[b["id"]] = {"id": b["id"], "title": name, "crumbs": crumbs, "body": body, "labels": "\n".join(labels), "chunks": _chunks(lines),
                          "snippet": body[:240] or crumbs or "Empty page",

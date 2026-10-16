@@ -118,7 +118,7 @@ class Engine:
         page like a password list would print unrelated secrets). Empty when no block holds a query word."""
         pat = re.compile("|".join(r"\b" + re.escape(t) for t in terms), re.I)
         best, best_key, best_id = None, None, None
-        for bid, line in walk(self.snap.blocks[pid], self.snap.blocks):
+        for bid, line in walk(self.snap.blocks[pid], self.snap.blocks, self.snap.cols):
             words = {m.group().lower() for m in pat.finditer(line)}
             if words:  # a word few pages have beats a common one; among equals the shorter, more specific block wins
                 key = (sum(1 / self.df(w) for w in words), -len(line))

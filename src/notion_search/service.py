@@ -111,7 +111,7 @@ async def answer(ws, paused, engine):
                                          "responseHeaders": headers, "body": body}}))
 
 
-async def serve_tab(tab, engine, active):
+async def serve_tab(tab, engine):
     try:
         async with websockets.connect(tab["webSocketDebuggerUrl"], max_size=None) as ws:
             await ws.send(json.dumps({"id": 1, "method": "Fetch.enable", "params": {
@@ -123,8 +123,6 @@ async def serve_tab(tab, engine, active):
                     await answer(ws, msg["params"], engine)
     except Exception as e:
         log(f"tab closed: {e!r}"[:120])
-    finally:
-        active.discard(tab["id"])
 
 
 def notion_tabs():
@@ -137,12 +135,21 @@ def notion_tabs():
 
 
 async def watch_tabs(engine):
-    active = set()
+    tasks, tick = {}, time.time()
+    loop = asyncio.get_running_loop()
     while True:
+        now, slept = time.time(), time.time() - tick > 5  # a long gap between ticks: the Mac was asleep
+        tick = now
+        if slept:  # sockets made before sleep are dead but look open: drop them, and page the model back in
+            log("woke from sleep")
+            for task in tasks.values():
+                task.cancel()
+            tasks.clear()
+            loop.run_in_executor(EXEC, engine.search, "warm up")
+        tasks = {tid: t for tid, t in tasks.items() if not t.done()}
         for tab in await asyncio.to_thread(notion_tabs):
-            if tab["id"] not in active:
-                active.add(tab["id"])
-                asyncio.create_task(serve_tab(tab, engine, active))
+            if tab["id"] not in tasks:
+                tasks[tab["id"]] = asyncio.create_task(serve_tab(tab, engine))
         await asyncio.sleep(1)
 
 
