@@ -68,7 +68,7 @@ def state_line():
 
 def bar_str(done, total, width=24):
     n = min(width, width * done // total)
-    return f"{C}{'━' * n}{D}{'─' * (width - n)}{N} {100 * done // total:3d}%"
+    return f"{G}{'━' * n}{D}{'─' * (width - n)}{N} {100 * done // total:3d}%"
 
 
 class Checklist:
@@ -87,8 +87,8 @@ class Checklist:
             print(f"\033[{len(self.names) + 2}A", end="")
         for name, st, det in zip(self.names, self.state, self.detail):
             name = f"{name:<24}"
-            line = {"done": f"{G}✓{N} {name} {D}{det}{N}", "active": f"{C}●{N} {B}{name}{N} {det}",
-                    "fail": f"{R}✗{N} {name} {R}{det}{N}"}.get(st, f"{D}○ {name}{N}")
+            line = {"done": f"{G}✓{N} {name} {D}{det}{N}", "active": f"{G}■{N} {B}{name}{N} {det}",
+                    "fail": f"{R}✗{N} {name} {R}{det}{N}"}.get(st, f"{D}□ {name}{N}")
             print(f"\033[K{RAIL}  {line}")
         print(f"\033[K{RAIL}\n\033[K{RAIL}  {D}{self.caption}{N}", flush=True)
         self.drawn = True
@@ -178,7 +178,7 @@ def install_program(ui):
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     frames, f, t = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏", 0, time.time()
     while proc.poll() is None:
-        ui.detail[ui.active] = f"{C}{frames[f % 10]}{N} {D}installing packages · {time.time() - t:.0f}s{N}"
+        ui.detail[ui.active] = f"{G}{frames[f % 10]}{N} {D}installing packages · {time.time() - t:.0f}s{N}"
         ui.draw()
         f += 1
         time.sleep(0.12)
@@ -319,9 +319,9 @@ def pick(title, options):
             print(f"{C}◆{N}  {title}")
             for i, (label, desc) in enumerate(options):
                 if i == sel:
-                    print(f"{RAIL}  {C}●{N} {B}{label:<10}{N} {D}{desc[:width]}{N}")
+                    print(f"{RAIL}  {G}■{N} {B}{label:<10}{N} {D}{desc[:width]}{N}")
                 else:
-                    print(f"{RAIL}  {D}○ {label:<10} {desc[:width]}{N}")
+                    print(f"{RAIL}  {D}□ {label:<10} {desc[:width]}{N}")
             print(f"{D}└{N}  {D}↑↓ move · enter select · q quit{N}", flush=True)
             key = read_key()
             if key == "up":

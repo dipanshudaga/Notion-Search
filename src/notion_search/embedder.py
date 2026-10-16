@@ -8,7 +8,10 @@ import json
 import os
 import shutil
 import struct
+import threading
+import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -19,6 +22,7 @@ MODEL = "google/embeddinggemma-2"
 DIM = 768
 AUDIO = ("audio_tower.", "embed_audio.")
 QUERY_LEN = 32
+WORKERS, PIECE = 8, 8 * 1024 * 1024  # parallel download connections, and the size of each request
 
 
 def query_prompt(text):
@@ -29,19 +33,21 @@ def doc_prompt(title, text):
     return f"title: {title or 'none'} | text: {text}"
 
 
-def fetch_text_weights(dest, progress):
+def fetch_text_weights(dest, progress, before=None):
     """Download the weights without the audio part (600 MB we do not use). We read the safetensors header, request
-    the byte ranges of every other tensor (text and image), and write them as a smaller safetensors file."""
+    the byte ranges of every other tensor (text and image), and write them as a smaller safetensors file.
+    progress(done, total) is called for every megabyte, and at once with 0; `before` runs after that first call."""
     from huggingface_hub import hf_hub_url
 
     url = hf_hub_url(MODEL, "model.safetensors")
 
-    def get(start, end):  # bytes start..end inclusive
-        with urllib.request.urlopen(urllib.request.Request(url, headers={"Range": f"bytes={start}-{end}"})) as r:
-            return r.read()
+    def request(start, end):  # bytes start..end inclusive
+        return urllib.request.urlopen(urllib.request.Request(url, headers={"Range": f"bytes={start}-{end}"}))
 
-    (n,) = struct.unpack("<Q", get(0, 7))
-    header = json.loads(get(8, 7 + n))
+    with request(0, 7) as r:
+        (n,) = struct.unpack("<Q", r.read())
+    with request(8, 7 + n) as r:
+        header = json.loads(r.read())
     meta = header.pop("__metadata__", None)
     keep = sorted((k for k in header if not k.startswith(AUDIO)), key=lambda k: header[k]["data_offsets"][0])
     new, pos = {}, 0
@@ -51,22 +57,51 @@ def fetch_text_weights(dest, progress):
         pos += end - start
     blob = json.dumps(({"__metadata__": meta} if meta else {}) | new).encode()
     blob += b" " * (-len(blob) % 8)
+
+    progress and progress(0, pos)
+    before and before()  # the small files (tokenizer, config) come first, while the bar already shows 0%
+    dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(".part")
+    base = 8 + len(blob)  # where the tensor data starts in the new file
+    pieces, cur = [], None  # (source start, source end, offset in the new file); neighbours merge, pieces stay <= 8 MB
+    dest_pos = 0
+    for k in keep:
+        s0, e0 = header[k]["data_offsets"]
+        if cur and s0 == cur[1] and e0 - cur[0] <= PIECE:
+            cur[1] = e0
+        else:
+            cur = [s0, e0, dest_pos]
+            pieces.append(cur)
+        dest_pos += e0 - s0
+    done, lock = 0, threading.Lock()
+
+    def fetch(piece):  # one range request, written straight to its place in the file; retried on network errors
+        nonlocal done
+        s0, e0, off = piece
+        for attempt in range(4):
+            got = 0
+            try:
+                with request(8 + n + s0, 8 + n + e0 - 1) as r:
+                    while chunk := r.read(256 * 1024):
+                        os.pwrite(fd, chunk, base + off + got)
+                        got += len(chunk)
+                        with lock:
+                            done += len(chunk)
+                            progress and progress(done, pos)
+                return
+            except OSError:
+                with lock:
+                    done -= got
+                if attempt == 3:
+                    raise
+                time.sleep(1 + attempt)
+
     with open(tmp, "wb") as f:
+        fd = f.fileno()
         f.write(struct.pack("<Q", len(blob)) + blob)
-        done = 0
-        runs, cur = [], None  # one request per tensor is slow, so merge neighbours into runs of up to 32 MB
-        for k in keep:
-            s0, e0 = header[k]["data_offsets"]
-            if cur and s0 == cur[1] and e0 - cur[0] <= 32 * 1024 * 1024:
-                cur[1] = e0
-            else:
-                cur = [s0, e0]
-                runs.append(cur)
-        for s0, e0 in runs:
-            f.write(get(8 + n + s0, 8 + n + e0 - 1))
-            done += e0 - s0
-            progress and progress(done, pos)
+        f.flush()
+        with ThreadPoolExecutor(WORKERS) as pool:  # several connections at once: one stream is often throttled
+            list(pool.map(fetch, pieces))
     tmp.rename(dest)
 
 
@@ -90,8 +125,8 @@ def model_path(say=print, progress=None):
         shutil.copytree(cached, MODEL_DIR, dirs_exist_ok=True)
     else:
         say("Downloading about 900 MB (once)")
-        snapshot_download(MODEL, local_dir=MODEL_DIR, ignore_patterns=["model.safetensors"])  # tokenizer, config
-        fetch_text_weights(MODEL_DIR / "model.safetensors", progress)
+        fetch_text_weights(MODEL_DIR / "model.safetensors", progress,
+                           before=lambda: snapshot_download(MODEL, local_dir=MODEL_DIR, ignore_patterns=["model.safetensors"]))
     return str(MODEL_DIR)
 
 
