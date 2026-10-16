@@ -12,8 +12,8 @@ A private, offline replacement for the Cmd+K search in Notion Desktop, powered b
 uvx notion-search
 ```
 
-Notion's own search leans on exact words and titles. It misses text deep inside long pages, links you saved, and
-anything you only remember by its meaning. Notion Search keeps the same Cmd+K box and answers it from your own Mac
+Notion's own search leans on exact words and titles. It misses text deep inside long pages, links you saved, database
+tags and properties, and anything you only remember by its meaning. Notion Search keeps the same Cmd+K box and answers it from your own Mac
 instead. It indexes every page in your workspace and ranks each query by exact words and by meaning together. Each
 result opens at the block that matched, with Notion's blue highlight.
 
@@ -45,9 +45,10 @@ The same actions work as commands: `notion-search update`, `status`, `restart`, 
 ## What gets searched
 
 Page titles and folder paths, and the full text of every page: toggles, columns, lists, callouts and table cells.
+Database properties are searched too: a book is found by its author, and a task by its status or tag.
 Long pages are split into chunks of about 1,500 characters, so a match deep inside a page still finds it.
 
-Database properties such as Author, tags and status are searched too. Not searched: dates, people, and the contents of PDFs, images and other files. Notion
+Not searched: dates, people, and the contents of PDFs, images and other files. Notion
 Desktop must have opened a page at least once before it can be indexed. New and edited pages are picked up within
 about 15 seconds.
 
