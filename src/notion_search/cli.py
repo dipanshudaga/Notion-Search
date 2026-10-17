@@ -375,7 +375,7 @@ def do_update():
     tool = program_remover()
     if newer and tool and tool[0] == "uv" and not running_from_uvx():
         ui = Checklist("update", [f"Updating {current} → {latest}"])
-        ui.start(0, "uv installs the new version in its own environment")
+        ui.start(0)
         python = install_program(ui, f"notion-search=={latest}")
         if not python:
             return ui.failed()
