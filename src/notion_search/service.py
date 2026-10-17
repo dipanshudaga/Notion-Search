@@ -145,12 +145,21 @@ async def watch_tabs(engine):
             for task in tasks.values():
                 task.cancel()
             tasks.clear()
-            loop.run_in_executor(EXEC, engine.search, "warm up")
+            loop.run_in_executor(EXEC, engine.warm)
         tasks = {tid: t for tid, t in tasks.items() if not t.done()}
         for tab in await asyncio.to_thread(notion_tabs):
             if tab["id"] not in tasks:
                 tasks[tab["id"]] = asyncio.create_task(serve_tab(tab, engine))
         await asyncio.sleep(1)
+
+
+async def keep_warm(engine):
+    """A search after a few idle minutes took 2 to 9 s on an 8 GB Mac: macOS had compressed or swapped out the model's
+    memory. A tiny search every 20 s keeps those pages in use (about 25 ms of GPU time)."""
+    loop = asyncio.get_running_loop()
+    while True:
+        await asyncio.sleep(20)
+        await loop.run_in_executor(EXEC, engine.warm)
 
 
 # ── Background index sync ────────────────────────────────────────────────────
@@ -207,7 +216,7 @@ async def main():
     log(f"ready: {len(engine.pages)} pages, {len(engine.chunk_page)} chunks indexed")
     if indexing:
         return
-    await asyncio.gather(keep_notion_hooked(), watch_tabs(engine), keep_index_fresh(engine))
+    await asyncio.gather(keep_notion_hooked(), watch_tabs(engine), keep_index_fresh(engine), keep_warm(engine))
 
 
 if __name__ == "__main__":

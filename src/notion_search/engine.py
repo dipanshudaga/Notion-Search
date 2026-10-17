@@ -65,6 +65,13 @@ class Engine:
                 break
         return list(hits)[:limit]
 
+    def warm(self):
+        """Run the model and read every vector once, on a query that is never cached, so macOS keeps their memory resident."""
+        self.warm_count = getattr(self, "warm_count", 0) + 1
+        vec = self.embedder.embed([query_prompt(f"warm up {self.warm_count}")], max_length=QUERY_LEN, fixed=True)[0]
+        if len(self.chunk_page):
+            self.vecs @ vec
+
     def meaning(self, text, limit=25):
         """Pages whose best chunk stands out for this query: [(page_id, that chunk's text)], best first."""
         if not len(self.chunk_page):
