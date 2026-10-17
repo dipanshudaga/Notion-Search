@@ -10,6 +10,7 @@ import sqlite3
 import subprocess
 import sys
 import termios
+import textwrap
 import time
 import tty
 import urllib.request
@@ -140,8 +141,12 @@ class Checklist:
         self.draw()
 
     def failed(self, detail="failed"):
-        self.state[self.active], self.detail[self.active] = "fail", detail
-        self.draw()
+        cols = shutil.get_terminal_size().columns
+        lines = [w for line in explain(getattr(self, "output", "")).splitlines() for w in textwrap.wrap(line, max(20, cols - 6))]
+        self.state[self.active], self.detail[self.active], self.caption = "fail", detail, f"{N}{Y}{lines[0]}"
+        self.draw()  # the reason starts on the line under the list; the rest follows
+        for line in lines[1:]:
+            out(f"{RAIL}  {Y}{line}{N}")
 
     def progress(self, done, total, unit, scale):
         if total > 0:
@@ -151,6 +156,16 @@ class Checklist:
             width = 24 if inline >= 24 else max(6, min(24, cols - 6 - len(counts) - 8))  # else it goes under the list
             self.detail[self.active] = f"{bar_str(done, total, width)}  {D}{counts}{N}"
             self.draw()
+
+
+def explain(text):
+    """Say in plain words why a command failed. Unknown errors show the last few lines of its output."""
+    low = text.lower()
+    if "no version of notion-search" in low:
+        return "PyPI is still adding the new version. This can take a minute after a release.\nTry Update again shortly."
+    if any(k in low for k in ("failed to fetch", "error sending request", "dns error", "connection")):
+        return "Could not reach PyPI. Check your internet connection and try again."
+    return "\n".join(l.strip() for l in text.splitlines() if l.strip())[-300:] or "Something went wrong."
 
 
 def run_service(ui, flag, python=None):
@@ -234,22 +249,33 @@ def newest_known_version():
 
 
 def install_program(ui, spec=None):
-    """Install the notion-search command permanently with `uv tool`, showing a spinner. Returns the new Python path."""
+    """Install the notion-search command permanently with `uv tool`, showing a spinner. Returns the new Python path.
+    Right after a release PyPI's index can lag a minute, so "no version" is retried a few times before giving up."""
     spec = spec or os.environ.get("NOTION_SEARCH_SPEC") or f"notion-search=={newest_known_version()}"
-    proc = subprocess.Popen(["uv", "tool", "install", "--python", "3.12", "--force", "--quiet", "--refresh-package", "notion-search", spec],
-                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    frames, f, t = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏", 0, time.time()
-    while proc.poll() is None:
-        ui.detail[ui.active] = f"{G}{frames[f % 10]}{N} {D}installing packages · {time.time() - t:.0f}s{N}"
+    frames, f = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏", 0
+
+    def spin(label, since):
+        nonlocal f
+        ui.detail[ui.active] = f"{G}{frames[f % 10]}{N} {D}{label} · {time.time() - since:.0f}s{N}"
         ui.draw()
         f += 1
         time.sleep(0.12)
-    if proc.returncode:
-        out(f"\n{RAIL}  {R}Something went wrong. Last lines:{N}")
-        for line in proc.stdout.read().splitlines()[-12:]:
-            out(f"{RAIL}    {line}")
-        return None
-    return str(Path(uv_output("tool", "dir")) / "notion-search" / "bin" / "python")
+
+    for attempt in range(4):
+        t = time.time()
+        proc = subprocess.Popen(["uv", "tool", "install", "--python", "3.12", "--force", "--quiet", "--refresh-package", "notion-search", spec],
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        while proc.poll() is None:
+            spin("installing packages" if attempt == 0 else "installing", t)
+        if not proc.returncode:
+            return str(Path(uv_output("tool", "dir")) / "notion-search" / "bin" / "python")
+        ui.output = proc.stdout.read()
+        if "no version of notion-search" not in ui.output.lower():
+            break
+        t = time.time()
+        while time.time() - t < 12 and attempt < 3:  # wait for PyPI, then try again
+            spin("waiting for PyPI", t)
+    return None
 
 
 def needs_model():
