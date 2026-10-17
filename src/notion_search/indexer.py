@@ -75,7 +75,7 @@ def read_notion():
     for r in db.execute("SELECT * FROM collection WHERE alive = 1"):
         if r["moved_to_trash_time"] is None:
             cols[r["id"]] = {"id": r["id"], "version": int(r["version"] or 1), "alive": True,
-                             "name": _json(r["name"], [[r["id"]]]),
+                             "name": _json(r["name"], []),  # an unnamed database has no name: never fall back to its id
                              "parent_id": r["parent_id"], "parent_table": r["parent_table"],
                              "schema": _json(r["schema"], {})}
     blocks, gone = {}, set()  # gone: deleted blocks, so a missing child is told apart from one Notion never loaded
