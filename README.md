@@ -82,7 +82,8 @@ Each query runs both ways and the results are merged. A meaning match only count
 usual score for that query, so nonsense queries return nothing. Pages that hold all your words, and the page you
 have open, get a small boost. Under each result you see the one block that matched best.
 
-Search takes about 20 to 50 ms. Memory is about 800 MB, mostly the model. The first index takes 2 to 3 minutes for
+Searching the local index takes about 20 to 50 ms. While you are online, the check with Notion's own search for pages
+not on your Mac adds about half a second. Memory is about 800 MB, mostly the model. The first index takes 2 to 3 minutes for
 about 800 pages. After that only changed pages are processed.
 
 ## FAQ
