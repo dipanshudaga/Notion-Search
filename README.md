@@ -83,20 +83,39 @@ about 800 pages. After that only changed pages are processed.
 
 ## FAQ
 
-**Why does Notion restart when I open it?** Notion has to run with a debug port so the service can answer its
-searches. If you open it normally, the service restarts it once with the port enabled. Your pages are safe, because
-Notion saves continuously.
+### Does it keep working after a Notion update?
 
-**Windows or Linux?** Not yet. The model runs on [MLX](https://github.com/ml-explore/mlx), which needs Apple
-Silicon. A port would be a welcome contribution; see [CONTRIBUTING.md](CONTRIBUTING.md).
+Yes. The service checks every 2 seconds that Notion is running with the debug port. After an update, or any normal
+launch, Notion starts without it. The service then restarts Notion once with the port enabled. You do not need to
+set anything up again.
 
-**Does it work in the browser?** No. It needs Notion Desktop for Mac.
+### Why does Notion restart when I open it?
 
-**Something is wrong.** Run `notion-search status`, then `notion-search logs`. If results look stale, choose
-Reindex in the menu.
+Notion has to run with a debug port so the service can answer its searches. If you open it normally, the service
+restarts it once with the port enabled. Your pages are safe, because Notion saves continuously.
 
-**How do I remove it?** Run `notion-search`, choose Uninstall and confirm. `uv` stays, because other tools may use
-it.
+### A page is missing from the results.
+
+Notion Search indexes the pages in Notion Desktop's local database. Notion saves a page there when it loads it, so a
+page that Notion Desktop has never loaded on your Mac cannot be found yet. Open the page once and it appears within
+about 15 seconds. Run `notion-search status` to see how many pages are indexed.
+
+### Does it work on Windows or Linux?
+
+Not yet. The model runs on [MLX](https://github.com/ml-explore/mlx), which needs Apple Silicon. A port would be a
+welcome contribution; see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+### Does it work in the browser?
+
+No. It needs Notion Desktop for Mac.
+
+### Something is wrong.
+
+Run `notion-search status`, then `notion-search logs`. If results look stale, choose Reindex in the menu.
+
+### How do I remove it?
+
+Run `notion-search`, choose Uninstall and confirm. `uv` stays, because other tools may use it.
 
 ## Contributing
 
