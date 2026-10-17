@@ -139,6 +139,30 @@ class Engine:
             best = ("..." if start else "") + best[start:start + 160] + "..."
         return best, best_id
 
+    def merge(self, data, cloud, limit=12):
+        """Add Notion's own hits for pages whose text this Mac does not have: pages listed by title only (their blocks
+        load when you open them) or missing from the local database. Pages with local text are answered locally."""
+        mine = {r["id"]: i for i, r in enumerate(data["results"])}
+        fresh = []
+        for r in cloud.get("results", []):
+            pid = r.get("id")
+            if pid in self.pages and pid not in self.snap.thin:
+                continue
+            if pid in mine:  # a thin page we matched by title: Notion's hit also shows the text that matched
+                data["results"][mine[pid]] = r
+            else:
+                fresh.append(r)
+        if fresh:  # ponytail: fixed slots (after the first 6 local hits), no score blending; tune if it reads oddly
+            data["results"][6:6] = fresh[:4]
+        data["results"] = data["results"][:limit]
+        for table, rows in (cloud.get("recordMap") or {}).items():
+            if isinstance(rows, dict):
+                have = data["recordMap"].setdefault(table, {})
+                for key, row in rows.items():
+                    have.setdefault(key, row)
+        data["total"] = len(data["results"])
+        return data
+
     # ── Notion's response format ─────────────────────────────────────────────
 
     @staticmethod

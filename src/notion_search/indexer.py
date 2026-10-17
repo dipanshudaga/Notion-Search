@@ -19,7 +19,7 @@ FINGERPRINT = f"{MODEL} prompts1 chunks1500 len512 q8g128 labels1 props1"  # cha
 PAGE_TYPES = {"page", "collection_view_page"}
 CHUNK_CHARS = 1500  # a long page becomes several chunks, each embedded on its own
 
-Snapshot = namedtuple("Snapshot", "docs blocks cols spaces")
+Snapshot = namedtuple("Snapshot", "docs blocks cols spaces thin")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS pages(id TEXT PRIMARY KEY, title TEXT, snippet TEXT, sig TEXT);
@@ -68,7 +68,9 @@ def read_notion():
                              "name": _json(r["name"], [[r["id"]]]),
                              "parent_id": r["parent_id"], "parent_table": r["parent_table"],
                              "schema": _json(r["schema"], {})}
-    blocks = {}
+    blocks, gone = {}, set()  # gone: deleted blocks, so a missing child is told apart from one Notion never loaded
+    for r in db.execute("SELECT id FROM block WHERE alive = 0"):
+        gone.add(r[0])
     for r in db.execute("SELECT * FROM block WHERE alive = 1"):
         if r["moved_to_trash_time"] is not None or r["archived_time"] is not None:
             continue
@@ -80,7 +82,7 @@ def read_notion():
             v["format"] = _json(r["format"], {})
         blocks[r["id"]] = v
     db.close()
-    return spaces, teams, cols, blocks
+    return spaces, teams, cols, blocks, gone
 
 
 def _live(blocks, cols, spaces, teams):
@@ -186,7 +188,7 @@ def _chunks(lines):
 
 
 def snapshot():
-    spaces, teams, cols, blocks = read_notion()
+    spaces, teams, cols, blocks, gone = read_notion()
     live = _live(blocks, cols, spaces, teams)
     docs = {}
     for b in blocks.values():
@@ -199,7 +201,9 @@ def snapshot():
         docs[b["id"]] = {"id": b["id"], "title": name, "crumbs": crumbs, "body": body, "labels": "\n".join(labels), "chunks": _chunks(lines),
                          "snippet": body[:240] or crumbs or "Empty page",
                          "sig": hashlib.sha1(f"{name}\0{crumbs}\0{body}".encode()).hexdigest()}
-    return Snapshot(docs, blocks, cols, spaces)
+    # pages Notion lists but has not loaded the text of (it saves a page's blocks when you open the page)
+    thin = {pid for pid in docs if any(k not in blocks and k not in gone for k in blocks[pid]["content"])}
+    return Snapshot(docs, blocks, cols, spaces, thin)
 
 
 def open_index():

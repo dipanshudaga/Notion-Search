@@ -83,35 +83,72 @@ def page_id_from_url(url):
     return f"{h[:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:]}" if h else None
 
 
-async def answer(ws, paused, engine):
+BYPASS = "x-ns-bypass"  # marks our own call to Notion's search so the hook lets it through
+CLOUD_WAIT = 1.0  # seconds to wait for Notion's own answer; offline or slow, the local answer goes alone
+NO_JS_HEADERS = {"host", "cookie", "origin", "referer", "user-agent", "content-length", "connection", "accept-encoding"}
+
+
+async def cloud_search(ws, pending, req):
+    """Notion's own answer to this query, fetched through the tab (it carries your login), or None."""
+    headers = {k: v for k, v in req.get("headers", {}).items()
+               if k.lower() not in NO_JS_HEADERS and not k.lower().startswith("sec-")}
+    headers[BYPASS] = "1"
+    js = ("fetch('/api/v3/search',{method:'POST',credentials:'include',headers:%s,body:%s})"
+          ".then(r=>r.ok?r.text():null).catch(()=>null)") % (json.dumps(headers), json.dumps(req["postData"]))
+    mid, fut = next(ids), asyncio.get_running_loop().create_future()
+    pending[mid] = fut
+    try:
+        await ws.send(json.dumps({"id": mid, "method": "Runtime.evaluate",
+                                  "params": {"expression": js, "awaitPromise": True, "returnByValue": True}}))
+        text = (await asyncio.wait_for(fut, CLOUD_WAIT)).get("result", {}).get("result", {}).get("value")
+        return json.loads(text) if text else None
+    except (asyncio.TimeoutError, ValueError, OSError):
+        return None
+    finally:
+        pending.pop(mid, None)
+
+
+async def answer(ws, paused, engine, pending):
     loop, req = asyncio.get_running_loop(), paused["request"]
+    headers = req.get("headers", {})
+    if BYPASS in {k.lower() for k in headers}:  # our own call: send it on, without the marker
+        return await ws.send(json.dumps({"id": next(ids), "method": "Fetch.continueRequest", "params": {
+            "requestId": paused["requestId"],
+            "headers": [{"name": k, "value": v} for k, v in headers.items() if k.lower() != BYPASS]}}))
     body = None
     if urlparse(req["url"]).path == "/api/v3/search":
         try:
             query = json.loads(req.get("postData") or "{}").get("query", "").strip()
             if query:
                 t = time.perf_counter()
-                headers = req.get("headers", {})
                 current = page_id_from_url(headers.get("Referer") or headers.get("referer"))
+                cloud = asyncio.create_task(cloud_search(ws, pending, req))  # runs while the local search does
                 data = await loop.run_in_executor(EXEC, engine.v3, query, 12, current)
+                extra = 0
+                if (found := await cloud):
+                    mine = {r["id"] for r in data["results"]}
+                    data = await loop.run_in_executor(EXEC, engine.merge, data, found)
+                    extra = sum(r["id"] not in mine for r in data["results"])
                 body = base64.b64encode(json.dumps(data).encode()).decode()
-                log(f"'{query}': {len(data['results'])} results in {(time.perf_counter() - t) * 1000:.0f} ms")
+                log(f"'{query}': {len(data['results'])} results in {(time.perf_counter() - t) * 1000:.0f} ms"
+                    + (f" (Notion added {extra} not on this Mac yet)" if extra > 0 else ""))
         except Exception as e:
             log(f"search failed, letting Notion answer: {e!r}")
     if body is None:
         return await ws.send(json.dumps({"id": next(ids), "method": "Fetch.continueRequest",
                                          "params": {"requestId": paused["requestId"]}}))
-    origin = req.get("headers", {}).get("Origin")
-    headers = [{"name": "Content-Type", "value": "application/json; charset=utf-8"},
-               {"name": "Access-Control-Allow-Origin", "value": origin or "*"}]
+    origin = headers.get("Origin")
+    out = [{"name": "Content-Type", "value": "application/json; charset=utf-8"},
+           {"name": "Access-Control-Allow-Origin", "value": origin or "*"}]
     if origin:
-        headers.append({"name": "Access-Control-Allow-Credentials", "value": "true"})
+        out.append({"name": "Access-Control-Allow-Credentials", "value": "true"})
     await ws.send(json.dumps({"id": next(ids), "method": "Fetch.fulfillRequest",
                               "params": {"requestId": paused["requestId"], "responseCode": 200,
-                                         "responseHeaders": headers, "body": body}}))
+                                         "responseHeaders": out, "body": body}}))
 
 
 async def serve_tab(tab, engine):
+    pending = {}  # id of a command we sent -> future for its reply
     try:
         async with websockets.connect(tab["webSocketDebuggerUrl"], max_size=None) as ws:
             await ws.send(json.dumps({"id": 1, "method": "Fetch.enable", "params": {
@@ -119,8 +156,10 @@ async def serve_tab(tab, engine):
             log(f"hooked tab: {tab.get('title', '?')[:40]}")
             async for raw in ws:
                 msg = json.loads(raw)
-                if msg.get("method") == "Fetch.requestPaused":
-                    await answer(ws, msg["params"], engine)
+                if (fut := pending.get(msg.get("id"))) and not fut.done():
+                    fut.set_result(msg)
+                elif msg.get("method") == "Fetch.requestPaused":
+                    asyncio.create_task(answer(ws, msg["params"], engine, pending))  # not awaited: it waits on replies read here
     except Exception as e:
         log(f"tab closed: {e!r}"[:120])
 

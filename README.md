@@ -54,8 +54,12 @@ about 15 seconds.
 
 ## Private
 
-Everything runs on your Mac. No page text, query or telemetry leaves it, and it works offline. The only download is
-the model, once. Notion's database is opened read-only and Notion's app files are never changed.
+Search and indexing run on your Mac, and it works offline. No page text or telemetry leaves it, and the only download
+is the model, once. Notion's database is opened read-only and Notion's app files are never changed.
+
+One thing does go online. To find pages whose text is not on your Mac yet (see the FAQ), the service also sends your
+query to Notion's servers, the same request Notion sends without us. Offline, it skips that step and answers from the
+local index.
 
 The service talks to Notion over Chromium's DevTools port (`127.0.0.1:9222`), which any process running as you can
 reach. Do not use this on a Mac that other people control.
@@ -96,9 +100,9 @@ restarts it once with the port enabled. Your pages are safe, because Notion save
 
 ### A page is missing from the results.
 
-Notion Search indexes the pages in Notion Desktop's local database. Notion saves a page there when it loads it, so a
-page that Notion Desktop has never loaded on your Mac cannot be found yet. Open the page once and it appears within
-about 15 seconds. Run `notion-search status` to see how many pages are indexed.
+Notion saves a page's text on your Mac when you open the page. Until then Notion Desktop lists only its title, so
+Notion Search cannot read it. For those pages it adds Notion's own search hits to the results. Open the page once and
+it joins the local index within about 15 seconds; after that it is answered locally.
 
 ### Does it work on Windows or Linux?
 
