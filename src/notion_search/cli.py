@@ -4,6 +4,7 @@ import importlib.metadata
 import json
 import os
 import re
+import select
 import shutil
 import sqlite3
 import subprocess
@@ -59,12 +60,16 @@ def stop_service():
     launchctl("bootout", f"{DOMAIN}/{LABEL}")
 
 
+def version():
+    return importlib.metadata.version("notion-search")
+
+
 def state_line():
     if not PLIST.exists():
         return f"{D}○ service not installed{N}"
     if service_pid():
         return f"{G}● running{N} {D}· {page_count()} pages indexed{N}"
-    return f"{Y}○ installed, not running{N}"
+    return f"{Y}○ not running{N} {D}· Restart starts it{N}"
 
 
 # ── live checklist (installer) ────────────────────────────────────────────────
@@ -362,28 +367,28 @@ def do_update():
 
 
 def do_status():
-    out(f"{RAIL}  {state_line()}")
-    out(f"{RAIL}  {D}notion-search {importlib.metadata.version('notion-search')}{N}")
-    if PLIST.exists():
-        ps = subprocess.run(["ps", "-axo", "command="], capture_output=True, text=True).stdout
-        notion = "/Applications/Notion.app/Contents/MacOS/Notion"
-        if f"{notion} --remote-debugging-port" in ps:
-            ok("Notion is linked to Notion Search.")
-        elif notion in ps:
-            out(f"{RAIL}  {Y}!{N} Notion is open without the search link. The service restarts it in a few seconds.")
-        else:
-            out(f"{RAIL}  {D}Notion is not open.{N}")
-        if LOG.exists():
-            out(RAIL)
-            for line in LOG.read_text(errors="ignore").splitlines()[-6:]:
-                out(f"{RAIL}  {D}{line}{N}")
+    """Whether Notion is linked. The service state is already on screen above (or printed by the command)."""
+    if not PLIST.exists():
+        return
+    if not service_pid():
+        return out(f"{RAIL}  {Y}!{N} The search is off, so Notion uses its own. Choose Restart to start it.")
+    ps = subprocess.run(["ps", "-axo", "command="], capture_output=True, text=True).stdout
+    notion = "/Applications/Notion.app/Contents/MacOS/Notion"
+    if f"{notion} --remote-debugging-port" in ps:
+        ok("Notion is linked to Notion Search.")
+    elif notion in ps:
+        out(f"{RAIL}  {Y}!{N} Notion is open without the search link. The service restarts it in a few seconds.")
+    else:
+        out(f"{RAIL}  {D}Notion is not open.{N}")
 
 
 def do_restart():
     if not PLIST.exists():
         return fail("Notion Search is not installed.")
-    launchctl("kickstart", "-k", f"{DOMAIN}/{LABEL}")
-    ok("Restarted")
+    if register_service(sys.executable):  # restarts it if loaded, starts it if not
+        ok("Restarted")
+    else:
+        fail("The service did not start. Run notion-search logs to see why.")
 
 
 def do_reindex():
@@ -393,14 +398,19 @@ def do_reindex():
     for f in DATA.glob("index.db*"):
         f.unlink()
     ui = Checklist("rebuilding the index", ["Indexing pages", "Starting background services"])
-    ui.start(0)
-    if not run_service(ui, "--index"):
-        return ui.failed()
-    ui.done(0)
-    ui.start(1)
-    if not register_service(sys.executable):
-        return ui.failed()
-    ui.done(1)
+    try:
+        ui.start(0)
+        if not run_service(ui, "--index"):
+            return ui.failed()
+        ui.done(0)
+        ui.start(1)
+        if not register_service(sys.executable):
+            return ui.failed()
+        ui.done(1)
+    except KeyboardInterrupt:  # the index is saved in one step at the end, so an interrupted run leaves none
+        out(f"\n{RAIL}  {Y}Stopped.{N} Nothing was saved. The service is starting and builds the index itself.")
+        register_service(sys.executable)
+        return out(f"{D}└{N}  This takes about 3 minutes. Until then Notion uses its own search.\n")
     out(f"{D}└{N}  {G}{B}Done.{N} The service is running again.\n")
 
 
@@ -455,19 +465,20 @@ def confirm_uninstall():
 # ── menu (clack-style) ────────────────────────────────────────────────────────
 
 def header():
-    print(f"\033[H\033[2J\n{D}┌{N}  {B}Notion Search{N}\n{RAIL}  {state_line()}\n{RAIL}", flush=True)
+    print(f"\033[H\033[2J\n{D}┌{N}  {B}Notion Search{N} {D}{version()}{N}\n{RAIL}  {state_line()}\n{RAIL}", flush=True)
 
 
 def read_key():
-    ch = os.read(sys.stdin.fileno(), 1)
-    if ch == b"\x1b":
-        rest = os.read(sys.stdin.fileno(), 2)
-        return {b"[A": "up", b"[B": "down"}.get(rest, "esc")
-    return {b"\r": "enter", b"\n": "enter", b"k": "up", b"j": "down", b"q": "esc", b"\x03": "esc"}.get(ch, "")
+    fd = sys.stdin.fileno()
+    ch = os.read(fd, 1)
+    if ch == b"\x1b":  # an arrow key sends Esc plus two more bytes at once; a lone Esc sends nothing after it
+        rest = os.read(fd, 2) if select.select([fd], [], [], 0.05)[0] else b""
+        return {b"[A": "up", b"[B": "down"}.get(rest, "esc" if not rest else "")
+    return {b"\r": "enter", b"\n": "enter", b"k": "up", b"j": "down", b"\x03": "esc"}.get(ch, "")
 
 
 def pick(title, options):
-    """options: [(label, description)]. Returns the chosen index, or None on q / esc."""
+    """options: [(label, description)]. Returns the chosen index, or None on esc."""
     sel, fd = 0, sys.stdin.fileno()
     saved = termios.tcgetattr(fd)
     print("\033[?25l", end="")
@@ -483,7 +494,7 @@ def pick(title, options):
                     print(f"{RAIL}  {G}■{N} {B}{label:<11}{N} {D}{desc}{N}")
                 else:
                     print(f"{RAIL}  {D}□ {label:<11} {desc}{N}")
-            print(f"{D}└{N}  {D}↑↓ move · enter select · q quit{N}", flush=True)
+            print(f"{D}└{N}  {D}↑↓ move · enter select · esc quit{N}", flush=True)
             key = read_key()
             if key == "up":
                 sel = (sel - 1) % len(options)
@@ -516,7 +527,7 @@ def menu_options():
                 ("Status", "Is it running, and linked to Notion?"),
                 ("Restart", "Restart the background service"),
                 ("Reindex", "Re-read all your Notion pages from scratch"),
-                ("Uninstall", "Remove everything (Notion is never touched)"),
+                ("Uninstall", "Remove the service"),
                 ("Quit", "Close this menu")]
     options = [("Install", "Set up the search service and index your Notion")]
     if DATA.exists():  # something is left over from an earlier install
@@ -562,7 +573,7 @@ def serve():
 
 COMMANDS = {
     "serve": serve,
-    "install": do_install, "update": do_update, "status": do_status, "restart": do_restart, "reindex": do_reindex,
+    "install": do_install, "update": do_update, "status": lambda: (out(f"{B}Notion Search{N} {D}{version()}{N}"), out(state_line()), do_status()), "restart": do_restart, "reindex": do_reindex,
     "uninstall": lambda: do_uninstall(keep_data="--keep-data" in sys.argv) if confirm_uninstall() else out("Nothing was removed."),
     "logs": lambda: os.execvp("tail", ["tail", "-f", str(LOG)]),
 }
