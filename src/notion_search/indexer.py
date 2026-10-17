@@ -15,7 +15,7 @@ from .embedder import DATA, MODEL, doc_prompt
 
 NOTION_DB = Path.home() / "Library/Application Support/Notion/notion.db"
 INDEX_DB = DATA / "index.db"
-FINGERPRINT = f"{MODEL} prompts1 chunks1500 len512 q8g128 labels1 props1"  # change = every vector is recomputed on next start
+FINGERPRINT = f"{MODEL} prompts1 chunks1500 len512 q8g128 labels1 props1 dbpages1"  # change = every vector is recomputed on next start
 PAGE_TYPES = {"page", "collection_view_page"}
 CHUNK_CHARS = 1500  # a long page becomes several chunks, each embedded on its own
 
@@ -44,6 +44,16 @@ def rich(segs):
 
 def title(props):
     return rich((props or {}).get("title"))
+
+
+def own_collection(b, cols):
+    """The database a database page shows. Notion keeps its name there, not in the page's own title."""
+    return cols.get(((b.get("format") or {}).get("collection_pointer") or {}).get("id"))
+
+
+def page_name(b, cols):
+    col = own_collection(b, cols)
+    return title(b["properties"]) or (rich(col["name"]) if col else "")
 
 
 def block_text(b, blocks):
@@ -120,7 +130,7 @@ def _crumbs(page, blocks, cols):
     for _ in range(8):
         if table == "block" and id_ in blocks:
             rec = blocks[id_]
-            name = title(rec["properties"]) if rec["type"] in PAGE_TYPES else ""
+            name = page_name(rec, cols) if rec["type"] in PAGE_TYPES else ""
         elif table == "collection" and id_ in cols:
             rec = cols[id_]
             name = "".join(s[0] for s in rec["name"] if isinstance(s, list) and s)
@@ -192,8 +202,8 @@ def snapshot():
     live = _live(blocks, cols, spaces, teams)
     docs = {}
     for b in blocks.values():
-        name = title(b["properties"])
-        if b["type"] not in PAGE_TYPES or not name or not live(b["id"]):
+        name = page_name(b, cols) if b["type"] in PAGE_TYPES else ""
+        if not name or not live(b["id"]):
             continue
         crumbs = _crumbs(b, blocks, cols)
         lines, labels = _lines(b, blocks, cols)

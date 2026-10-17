@@ -10,7 +10,7 @@ from functools import lru_cache
 import numpy as np
 
 from .embedder import DIM, QUERY_LEN, Embedder, query_prompt
-from .indexer import open_index, snapshot, store, walk
+from .indexer import open_index, own_collection, snapshot, store, walk
 
 HL_OPEN, HL_CLOSE = "<gzkNfoUU>", "</gzkNfoUU>"  # Notion's own highlight markers; <b> would show up as text
 COVER_BONUS, TITLE_BONUS = 0.05, 0.03  # pages holding ALL the query words (title counts extra) beat partial matches
@@ -186,6 +186,9 @@ class Engine:
             space_id = block["space_id"] or default_space
             record_map["block"][pid] = {"role": "editor", "value": block}
             parent = block["parent_id"]
+            own = own_collection(block, snap.cols)  # a database page's title is its database's name
+            if own:
+                record_map["collection"][own["id"]] = {"role": "editor", "value": own}
             if block["parent_table"] == "collection" and parent in snap.cols:
                 record_map["collection"][parent] = {"role": "editor", "value": snap.cols[parent]}
             elif block["parent_table"] == "block" and parent in snap.blocks:
