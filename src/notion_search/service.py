@@ -14,11 +14,14 @@ import itertools
 import os
 import json
 import re
+import shutil
 import subprocess
 import sys
 import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import websockets
@@ -222,6 +225,56 @@ async def keep_index_fresh(engine):
             log(f"sync failed: {e!r}")
 
 
+# ── Self-update ──────────────────────────────────────────────────────────────
+
+RELEASE_AGE = 3600  # a release must be on PyPI this many seconds before it is installed (a bad one gets pulled quickly)
+LABEL = "com.notionsearch.service"
+
+
+def release_to_install():
+    """The newest version on PyPI if it is newer than this one and has been out for an hour, else None."""
+    with urllib.request.urlopen("https://pypi.org/pypi/notion-search/json", timeout=10) as r:
+        info = json.load(r)
+    latest = info["info"]["version"]
+    files = info["releases"].get(latest) or []
+    if not files:
+        return None
+    up = datetime.fromisoformat(files[0]["upload_time_iso_8601"].replace("Z", "+00:00"))
+    as_tuple = lambda v: tuple(int(x) for x in re.findall(r"\d+", v))
+    old = (datetime.now(timezone.utc) - up).total_seconds() >= RELEASE_AGE
+    from importlib.metadata import version
+    return latest if old and as_tuple(latest) > as_tuple(version("notion-search")) else None
+
+
+def install_release(latest):
+    """Install it the way Update does. Only for a copy installed by `uv tool`; returns True when it went in."""
+    home = Path.home()
+    uv = shutil.which("uv", path=os.pathsep.join(
+        [os.environ.get("PATH", ""), str(home / ".local/bin"), "/opt/homebrew/bin", "/usr/local/bin"]))  # launchd's PATH is bare
+    if not uv:
+        return False
+    tools = subprocess.run([uv, "tool", "dir"], capture_output=True, text=True).stdout.strip()
+    if not tools or Path(sys.prefix).resolve() != (Path(tools) / "notion-search").resolve():
+        return False  # installed some other way (pipx, a checkout): leave it to the user
+    done = subprocess.run([uv, "tool", "install", "--python", "3.12", "--force", "--quiet", "--refresh-package",
+                           "notion-search", f"notion-search=={latest}"], capture_output=True, text=True, timeout=900)
+    return done.returncode == 0
+
+
+async def keep_updated():
+    """Every 6 hours: if a release is more than an hour old, install it and restart on the new code."""
+    await asyncio.sleep(600)
+    while True:
+        try:
+            latest = await asyncio.to_thread(release_to_install)
+            if latest and await asyncio.to_thread(install_release, latest):
+                log(f"updated to {latest}, restarting")
+                subprocess.run(["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/{LABEL}"])
+        except Exception as e:
+            log(f"update check failed: {e!r}"[:120])
+        await asyncio.sleep(6 * 3600)
+
+
 PROTOCOL = bool(os.environ.get("NS_PROTOCOL"))  # set by the installer, which draws the progress itself
 
 
@@ -255,7 +308,7 @@ async def main():
     log(f"ready: {len(engine.pages)} pages, {len(engine.chunk_page)} chunks indexed")
     if indexing:
         return
-    await asyncio.gather(keep_notion_hooked(), watch_tabs(engine), keep_index_fresh(engine), keep_warm(engine))
+    await asyncio.gather(keep_notion_hooked(), watch_tabs(engine), keep_index_fresh(engine), keep_warm(engine), keep_updated())
 
 
 if __name__ == "__main__":

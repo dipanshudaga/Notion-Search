@@ -88,6 +88,11 @@ about 800 pages. After that only changed pages are processed.
 
 ## FAQ
 
+### Does it update itself?
+
+Yes. The service checks for a new release every few hours and installs it an hour after it comes out, then restarts.
+To update right away, choose Update in the menu.
+
 ### Does it keep working after a Notion update?
 
 Yes. The service checks every 2 seconds that Notion is running with the debug port. After an update, or any normal
