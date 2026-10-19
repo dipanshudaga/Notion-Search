@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "notion-search"
-version = "0.1.14"
+version = "0.1.15"
 description = "Offline, private hybrid search (exact words + meaning) for Notion Desktop's Cmd+K, running on your Mac"
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
@@ -24,7 +24,8 @@ classifiers = [
 dependencies = [
     "mlx>=0.32.3",
     "mlx-vlm>=0.7.8",            # EmbeddingGemma 2 support ships on PyPI from 0.7.x
-    "transformers>=5.19",
+    "transformers>=5.19",         # mlx-vlm imports it
+    "sentencepiece>=0.2",          # the tokenizer: 4.7 MB file, ~60 MB of RAM (the Hugging Face one costs ~300 MB)
     "huggingface-hub>=1.33",
     "numpy>=2.5",
     "websockets>=13",
