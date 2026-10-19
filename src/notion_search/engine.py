@@ -34,6 +34,8 @@ class Engine:
     def refresh(self, snap, progress=None):
         """Index what changed in Notion, then swap in the new snapshot. Returns the number of pages changed."""
         changed = store(self.conn, snap.docs, self.embedder, progress)
+        if changed:
+            self.embedder.trim()  # a bulk embed leaves hundreds of MB of GPU buffers cached
         if changed or self.snap is None:
             self.pages = {r[0]: (r[1], r[2]) for r in self.conn.execute("SELECT id, title, snippet FROM pages")}
             self.text = {r[0]: r[1:] for r in self.conn.execute("SELECT id, title, crumbs, body, labels FROM fts")}

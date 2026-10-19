@@ -151,6 +151,10 @@ class Embedder:
         self.embed(["warm up"] * 2, max_length=QUERY_LEN, fixed=True)  # compile Metal kernels now
         self.version = f"mlx-{mx.__version__}"
 
+    def trim(self):
+        """Hand back the GPU buffers MLX keeps for reuse (up to the cache limit after a bulk embed, ~500 MB)."""
+        self.mx.clear_cache()
+
     def embed(self, texts, max_length=512, fixed=False, progress=None):
         """fixed=True pads to max_length: MLX recompiles kernels for every new input shape (0.7-9 s a query)."""
         out = []
