@@ -3,8 +3,10 @@
 Everything runs on ONE thread (MLX requirement, and it keeps SQLite simple): build the Engine there, call it there.
 """
 
+import bisect
 import re
 import time
+from collections import Counter, defaultdict
 from functools import lru_cache
 
 import numpy as np
@@ -47,6 +49,13 @@ class Engine:
             self.qvec.cache_clear()
             self.hay = [f"{t}\n{c}\n{b}".lower() for t, c, b, _ in self.text.values()]
             self.df = lru_cache(512)(lambda term: sum(term in h for h in self.hay) or 1)  # pages holding a word
+            # every word in the index, for fixing typos: sorted (is there a word starting with this?) and by length (what is close?)
+            self.vocab = Counter(w for h in self.hay for w in set(re.findall(r"\w+", h)))
+            self.vocab_sorted = sorted(self.vocab)
+            self.by_length = defaultdict(list)
+            for w in self.vocab:
+                self.by_length[len(w)].append(w)
+            self.spelling = lru_cache(1024)(self._spelling)
         self.snap = snap
         return changed
 
@@ -55,6 +64,42 @@ class Engine:
     @staticmethod
     def terms(text):
         return re.findall(r"\w+", text.lower())
+
+    @staticmethod
+    def distance(a, b, limit):
+        """Edits (insert, delete, change, swap two neighbours) between two words, or limit + 1 when it is more than `limit`."""
+        if abs(len(a) - len(b)) > limit:
+            return limit + 1
+        prev2, prev = None, list(range(len(b) + 1))
+        for i, ca in enumerate(a, 1):
+            row = [i] + [0] * len(b)
+            for j, cb in enumerate(b, 1):
+                row[j] = min(prev[j] + 1, row[j - 1] + 1, prev[j - 1] + (ca != cb))
+                if i > 1 and j > 1 and ca == b[j - 2] and a[i - 2] == cb:
+                    row[j] = min(row[j], prev2[j - 2] + 1)
+            if min(row) > limit:
+                return limit + 1
+            prev2, prev = prev, row
+        return prev[-1]
+
+    def _spelling(self, term):
+        """The word as typed when the index has a word starting with it; otherwise the closest word in the index within a
+        typo or three ("prsai" -> "parsai"), the commonest one when several are equally close."""
+        if len(term) < 4:
+            return term
+        at = bisect.bisect_left(self.vocab_sorted, term)
+        if at < len(self.vocab_sorted) and self.vocab_sorted[at].startswith(term):
+            return term
+        limit = 1 if len(term) <= 6 else 2 if len(term) <= 10 else 3
+        best = None
+        for size in range(len(term) - limit, len(term) + limit + 1):
+            for word in self.by_length.get(size, ()):
+                d = self.distance(term, word, limit)
+                if d <= limit:
+                    key = (d, -self.vocab[word])
+                    if best is None or key < best[0]:
+                        best = (key, word)
+        return best[1] if best else term
 
     def words(self, terms, limit=25):
         """Pages containing every word (prefix match), then, for several words, pages containing any, best first."""
@@ -92,6 +137,9 @@ class Engine:
         terms = self.terms(text)
         if not terms:
             return []
+        fixed = [self.spelling(t) for t in terms]
+        if fixed != terms:  # a typo: search, rank and highlight with the word the index has
+            terms, text = fixed, " ".join(fixed)
         scores, chunks = {}, {}
         for rank, pid in enumerate(self.words(terms)):
             scores[pid] = 1.2 / (RRF_K + rank)
