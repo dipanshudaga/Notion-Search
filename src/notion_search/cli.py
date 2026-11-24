@@ -30,6 +30,9 @@ B, D, C, G, R, Y, N = ("\033[1m", "\033[2m", "\033[36m", "\033[32m", "\033[31m",
 RAIL = f"{D}│{N}"
 
 
+CLOSED = False  # a Checklist has drawn its closing └ line
+
+
 def out(text=""):
     print(text, flush=True)
 
@@ -143,6 +146,8 @@ class Checklist:
 
     def end(self, text):
         """The closing line. It replaces the empty caption row, so one rail line separates it from the steps."""
+        global CLOSED
+        CLOSED = True
         out(("\033[1A\033[K" if TTY and self.drawn else "") + f"{D}└{N}  {text}")
 
     def start(self, i, caption=""):
@@ -380,8 +385,8 @@ def do_install():
         ui.end(f"{G}{B}Updated to {version}.{N} " + ("It stays disconnected until you choose Connect." if disconnected() else "Notion Search is running."))
     else:
         ui.end(f"{G}{B}All set.{N} Open Notion and press {B}Cmd+K{N}.")
-        out(f"   {D}If Notion was already open, it restarts once so the search can attach.{N}")
-        out(f"   {D}Manage it any time with:{N} notion-search")
+        out(f"   {D}Notion restarts once to attach.{N}")
+        out(f"   {D}Manage it any time: notion-search{N}")
     if temporary and (bin_dir := uv_output("tool", "dir", "--bin")) and bin_dir not in os.environ.get("PATH", "").split(":"):
         out(f"   {Y}!{N} To use that command, run {B}uv tool update-shell{N} and open a new Terminal window.")
     out()
@@ -414,13 +419,13 @@ def do_update():
         ui.done(0)
         os.environ["NS_UPDATING"] = f"{head}|{ui.detail[0]}"  # the new code finishes this same box
         os.execv(python, [python, "-m", "notion_search.cli", "install"])  # the new code runs the setup
+    out(f"\n{D}┌{N}  {B}Update{N}\n{RAIL}")  # nothing to install: say so and leave the service alone
     if newer and tool:
-        out(f"{RAIL}  {Y}!{N} Version {latest} is available and you have {current}. Upgrade with: {B}pipx upgrade notion-search{N}")
+        out(f"{RAIL}  {Y}!{N} {latest} is available. Run {B}pipx upgrade notion-search{N}")
     elif latest:
-        out(f"{RAIL}  {G}✓{N} You have the newest version ({current}).")
+        out(f"{RAIL}  {G}✓{N} {current} is the newest version.")
     else:
-        out(f"{RAIL}  {D}Could not check for a new version. Are you offline? Refreshing what is installed.{N}")
-    do_install()
+        out(f"{RAIL}  {Y}!{N} Could not check. Are you offline?")
 
 
 def do_status():
@@ -436,7 +441,7 @@ def do_status():
     elif notion in ps:
         out(f"{RAIL}  {Y}!{N} Notion is open without the search link. The service restarts it in a few seconds.")
     else:
-        out(f"{RAIL}  {D}Notion is not open.{N}")
+        out(f"{RAIL}  {D}Notion is not open. It links itself when you open it.{N}")
 
 
 def show_status():
@@ -482,8 +487,11 @@ def do_disconnect():
             if NOTION not in subprocess.run(["ps", "-axo", "command="], capture_output=True, text=True).stdout:
                 break
             time.sleep(0.3)
-        subprocess.run(["open", "-a", "Notion"])
-        ok("Reopened Notion without the search link.")
+        for _ in range(8):  # macOS can refuse (error -600) for a moment after the app quits
+            time.sleep(1)
+            if subprocess.run(["open", "-a", "Notion"], capture_output=True).returncode == 0:
+                return ok("Reopened Notion without the search link.") or out(f"{RAIL}  {D}Choose Connect to turn the local search back on.{N}")
+        fail("Could not reopen Notion. Open it yourself.")
     out(f"{RAIL}  {D}Choose Connect to turn the local search back on.{N}")
 
 
@@ -560,7 +568,10 @@ def confirm_uninstall():
 
 # ── menu (clack-style) ────────────────────────────────────────────────────────
 
-def header():
+def header(full=True, title=""):
+    """The title, state and one-line description. Only the main menu and Status show them: other screens just clear."""
+    if not full:
+        return print("\033[H\033[2J" + (f"\n{D}┌{N}  {B}{title}{N}\n{RAIL}" if title else ""), flush=True)
     lines = [f"{D}┌{N}  {B}Notion Search{N} {D}{version()}{N}", f"{RAIL}  {state_line()}",
              f"{RAIL}  {D}Choose {N}{B}Connect{N}{D} to turn the local search back on.{N}" if PLIST.exists() and disconnected() and not service_pid() else
              f"{RAIL}  {D}Searches pages you have opened at least once.{N}", RAIL]
@@ -586,7 +597,7 @@ def update_notice():
     return ""
 
 
-def pick(title, options):
+def pick(title, options, full=True):
     """options: [(label, description)]. Returns the chosen index, or None on esc. Under every menu: the update notice."""
     notice = update_notice()
     sel, fd = 0, sys.stdin.fileno()
@@ -595,7 +606,7 @@ def pick(title, options):
     try:
         tty.setcbreak(fd)
         while True:
-            header()
+            header(full)
             cols = os.get_terminal_size().columns
             lines = [f"{C}◆{N}  {title}"]
             for i, (label, desc) in enumerate(options):
@@ -624,7 +635,12 @@ def pick(title, options):
 def wait_key():
     fd = sys.stdin.fileno()
     saved = termios.tcgetattr(fd)
-    print(f"{RAIL}\n{D}└{N}  {D}Press any key to go back{N}", end="", flush=True)
+    global CLOSED
+    if CLOSED:  # the box above already has its └ line
+        print(f"\n   {D}Press any key to go back{N}", end="", flush=True)
+    else:
+        print(f"{RAIL}\n{D}└{N}  {D}Press any key to go back{N}", end="", flush=True)
+    CLOSED = False
     try:
         tty.setcbreak(fd)
         os.read(fd, 1)
@@ -656,14 +672,14 @@ def menu():
         label = options[choice][0] if choice is not None else "Quit"
         if label == "Quit":
             break
-        header()
+        header(full=label == "Status", title=label if label in ("Restart", "Connect", "Disconnect") else "")
         if label in ("Uninstall", "Remove"):
             sure = pick("Remove Notion Search completely?", [
                 ("Yes, remove", ""),
-                ("Cancel", "")])
+                ("Cancel", "")], full=False)
             if sure != 0:
                 continue
-            header()
+            header(full=False)
             do_uninstall()
             return  # the command is gone: nothing left to show a menu for
         else:
