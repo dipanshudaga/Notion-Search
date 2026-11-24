@@ -113,11 +113,15 @@ def bar_str(done, total, width=24):
 class Checklist:
     """One line per step, redrawn in place; the active step carries a progress bar."""
 
-    def __init__(self, title, names):
+    def __init__(self, title, names, resume=None):
+        """resume=(step, took): continue the box an earlier process drew (same rows), with its first step done."""
         self.names, self.state, self.detail = names, ["pending"] * len(names), [""] * len(names)
         self.pad = max(len(n) for n in names)  # one column of names, as wide as the longest
         self.caption, self.drawn, self.active, self.t0 = "", False, 0, time.time()
-        out(f"\n{D}┌{N}  {B}Notion Search{N}  {D}· {title}{N}\n{RAIL}")
+        if resume:
+            self.drawn, self.state[0], self.detail[0] = True, "done", resume
+        else:
+            out(f"\n{D}┌{N}  {B}{title}{N}\n{RAIL}")
         self.draw()
 
     def draw(self):
@@ -136,6 +140,10 @@ class Checklist:
             print(f"\033[K{clip(f'{RAIL}  {line}', cols)}")
         print(f"\033[K{RAIL}\n\033[K{clip(f'{RAIL}  ' + (below or f'{D}{self.caption}{N}'), cols)}", flush=True)
         self.drawn = True
+
+    def end(self, text):
+        """The closing line. It replaces the empty caption row, so one rail line separates it from the steps."""
+        out(("\033[1A\033[K" if TTY and self.drawn else "") + f"{D}└{N}  {text}")
 
     def start(self, i, caption=""):
         self.active, self.state[i], self.detail[i], self.caption, self.t0 = i, "active", "", caption, time.time()
@@ -337,11 +345,17 @@ def do_install():
     if any(key == "index" for key, _ in steps):  # the old service must not write the index while it is rebuilt
         stop_service()
         subprocess.run(["pkill", "-f", "notion_search.service"], capture_output=True)
-    updating = bool(os.environ.get("NS_UPDATING"))
-    ui = Checklist("update" if updating else "installer", [name for _, name in steps])
+    updating = os.environ.get("NS_UPDATING")
+    names = [name for _, name in steps]
+    resumed = updating and len(steps) == 1 and "|" in updating  # the box Update drew: [Updating, Restarting]
+    if resumed:
+        head, took = updating.split("|")
+        ui = Checklist("Update", [head, *names], resume=took)
+    else:
+        ui = Checklist("Update" if updating else "Install", names)
     python = sys.executable
 
-    for i, (key, _) in enumerate(steps):
+    for i, (key, _) in enumerate(steps, 1 if resumed else 0):
         if key == "program":  # started with `uvx notion-search install`: put the command somewhere permanent
             ui.start(i, "uv keeps the program in its own folder")
             python = install_program(ui)
@@ -363,9 +377,9 @@ def do_install():
 
     version = importlib.metadata.version("notion-search")
     if updating:
-        out(f"{D}└{N}  {G}{B}Updated to {version}.{N} " + ("It stays disconnected until you choose Connect." if disconnected() else "Notion Search is running."))
+        ui.end(f"{G}{B}Updated to {version}.{N} " + ("It stays disconnected until you choose Connect." if disconnected() else "Notion Search is running."))
     else:
-        out(f"{D}└{N}  {G}{B}All set.{N} Open Notion and press {B}Cmd+K{N}.")
+        ui.end(f"{G}{B}All set.{N} Open Notion and press {B}Cmd+K{N}.")
         out(f"   {D}If Notion was already open, it restarts once so the search can attach.{N}")
         out(f"   {D}Manage it any time with:{N} notion-search")
     if temporary and (bin_dir := uv_output("tool", "dir", "--bin")) and bin_dir not in os.environ.get("PATH", "").split(":"):
@@ -391,14 +405,14 @@ def do_update():
     newer = bool(latest) and version_tuple(latest) > version_tuple(current)
     tool = program_remover()
     if newer and tool and tool[0] == "uv" and not running_from_uvx():
-        ui = Checklist("update", [f"Updating {current} → {latest}"])
+        head = f"Updating {current} → {latest}"
+        ui = Checklist("Update", [head, "Restarting background services"])
         ui.start(0)
         python = install_program(ui, f"notion-search=={latest}")
         if not python:
             return ui.failed()
         ui.done(0)
-        out(f"{D}└{N}  {G}Updated.{N} Now refreshing the service with the new version.\n")
-        os.environ["NS_UPDATING"] = "1"
+        os.environ["NS_UPDATING"] = f"{head}|{ui.detail[0]}"  # the new code finishes this same box
         os.execv(python, [python, "-m", "notion_search.cli", "install"])  # the new code runs the setup
     if newer and tool:
         out(f"{RAIL}  {Y}!{N} Version {latest} is available and you have {current}. Upgrade with: {B}pipx upgrade notion-search{N}")
@@ -479,7 +493,7 @@ def do_reindex():
     stop_service()
     for f in DATA.glob("index.db*"):
         f.unlink()
-    ui = Checklist("rebuilding the index", ["Indexing pages", "Starting background services"])
+    ui = Checklist("Reindex", ["Indexing pages", "Starting background services"])
     try:
         ui.start(0)
         if not run_service(ui, "--index"):
@@ -493,7 +507,7 @@ def do_reindex():
         out(f"\n{RAIL}  {Y}Stopped.{N} Nothing was saved. The service is starting and builds the index itself.")
         register_service(sys.executable)
         return out(f"{D}└{N}  This takes about 3 minutes. Until then Notion uses its own search.\n")
-    out(f"{D}└{N}  {G}{B}Done.{N} " + ("It stays disconnected until you choose Connect.\n" if disconnected() else "The service is running again.\n"))
+    ui.end(f"{G}{B}Done.{N} " + ("It stays disconnected until you choose Connect.\n" if disconnected() else "The service is running again.\n"))
 
 
 def program_remover():
