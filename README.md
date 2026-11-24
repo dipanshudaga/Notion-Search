@@ -90,8 +90,7 @@ about 800 pages. After that only changed pages are processed.
 
 ### Does it update itself?
 
-Yes. The service checks for a new release every few hours and installs it an hour after it comes out, then restarts.
-To update right away, choose Update in the menu.
+No. When a new version is out, the menu shows a notice under it. Choose Update to install it.
 
 ### Does it keep working after a Notion update?
 
