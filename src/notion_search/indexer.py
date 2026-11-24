@@ -1,7 +1,8 @@
 """Reads Notion Desktop's local database and keeps a hybrid index (FTS5 + EmbeddingGemma vectors) in sync.
 
-One path for everything: snapshot() reads Notion, store() embeds only the pages whose text changed
-(first run = every page, later runs = a handful). Nothing here touches Notion's files except to read them.
+One path for everything: snapshot() reads Notion, store_text() makes the pages whose text changed findable by their
+words at once, and store_vectors() embeds them a little later (first run = every page, later runs = a handful).
+Nothing here touches Notion's files except to read them.
 """
 
 import hashlib
@@ -92,6 +93,18 @@ def read_notion():
             v["format"] = _json(r["format"], {})
         blocks[r["id"]] = v
     db.close()
+    # A pasted GitHub/Figma/... link shown as a card is "‣" plus a pointer to a block that holds only the URL.
+    # Swap the pointer for the URL, so the repo name ("cleanyourtv") is text the index can find.
+    urls = {i: (b.get("format") or {}).get("original_url") for i, b in blocks.items() if b["type"] == "external_object_instance"}
+
+    def card_url(seg):  # the URL behind a link-card segment, else None
+        if isinstance(seg, list) and seg and seg[0] == "‣" and len(seg) > 1:
+            return next((urls.get(d[1]) for d in seg[1] if d and d[0] == "eoi"), None)
+
+    for b in blocks.values():
+        segs = b["properties"].get("title")
+        if segs:
+            b["properties"]["title"] = [[card_url(s)] if card_url(s) else s for s in segs]
     return spaces, teams, cols, blocks, gone
 
 
@@ -232,22 +245,35 @@ def open_index():
     return conn
 
 
-def store(conn, docs, embedder, progress=None):
-    """Bring the index in line with docs. Returns how many pages were added, changed or removed."""
+def store_text(conn, docs):
+    """Phase 1, fast: make new and edited pages findable by their words at once. Returns (pages still to embed,
+    number of pages removed). The "~" in sig marks a page whose vectors are old: if the service stops before phase 2,
+    the page is stored again on the next start."""
     have = dict(conn.execute("SELECT id, sig FROM pages"))
     gone = have.keys() - docs.keys()
     todo = [d for d in docs.values() if have.get(d["id"]) != d["sig"]]
-    jobs = [(d, c) for d in todo for c in d["chunks"]]
-    vecs = embedder.embed([doc_prompt(d["title"], f"{d['crumbs']}\n{c}" if d["crumbs"] else c) for d, c in jobs], progress=progress) if jobs else []
     with conn:
-        for pid in gone | {d["id"] for d in todo}:
+        for pid in gone:
             for table, col in (("pages", "id"), ("chunks", "page_id"), ("fts", "id")):
                 conn.execute(f"DELETE FROM {table} WHERE {col} = ?", (pid,))
         for d in todo:
-            conn.execute("INSERT INTO pages VALUES (?, ?, ?, ?)", (d["id"], d["title"], d["snippet"], d["sig"]))
+            for table in ("pages", "fts"):
+                conn.execute(f"DELETE FROM {table} WHERE id = ?", (d["id"],))
+            conn.execute("INSERT INTO pages VALUES (?, ?, ?, ?)", (d["id"], d["title"], d["snippet"], "~" + d["sig"]))
             conn.execute("INSERT INTO fts VALUES (?, ?, ?, ?, ?)", (d["id"], d["title"], d["crumbs"], d["body"], d["labels"]))
+    return todo, len(gone)
+
+
+def store_vectors(conn, todo, embedder, progress=None):
+    """Phase 2, slow: embed the pages' text (the meaning search), then mark them current."""
+    jobs = [(d, c) for d in todo for c in d["chunks"]]
+    vecs = embedder.embed([doc_prompt(d["title"], f"{d['crumbs']}\n{c}" if d["crumbs"] else c) for d, c in jobs], progress=progress) if jobs else []
+    with conn:
+        for d in todo:
+            conn.execute("DELETE FROM chunks WHERE page_id = ?", (d["id"],))
         counts = {}
         for (d, c), v in zip(jobs, vecs):
             n = counts[d["id"]] = counts.get(d["id"], -1) + 1
             conn.execute("INSERT INTO chunks VALUES (?, ?, ?, ?)", (d["id"], n, c, v.astype("float32").tobytes()))
-    return len(todo) + len(gone)
+        for d in todo:
+            conn.execute("UPDATE pages SET sig = ? WHERE id = ?", (d["sig"], d["id"]))

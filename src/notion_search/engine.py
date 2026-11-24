@@ -12,7 +12,7 @@ from functools import lru_cache
 import numpy as np
 
 from .embedder import DIM, QUERY_LEN, Embedder, query_prompt
-from .indexer import open_index, own_collection, snapshot, store, walk
+from .indexer import open_index, own_collection, snapshot, store_text, store_vectors, walk
 
 HL_OPEN, HL_CLOSE = "<gzkNfoUU>", "</gzkNfoUU>"  # Notion's own highlight markers; <b> would show up as text
 COVER_BONUS, TITLE_BONUS = 0.05, 0.03  # pages holding ALL the query words (title counts extra) beat partial matches
@@ -28,25 +28,27 @@ class Engine:
     def __init__(self, progress=None):
         self.embedder = Embedder()
         self.conn = open_index()
-        self.snap = None
+        self.snap = self.vecs = None
         self.qvec = lru_cache(256)(lambda q: self.embedder.embed([query_prompt(q)], max_length=QUERY_LEN, fixed=True)[0])
         self.refresh(snapshot(), progress)
         self.search("warm up")  # first query otherwise pays ~250 ms for cold caches
 
     def refresh(self, snap, progress=None):
-        """Index what changed in Notion, then swap in the new snapshot. Returns the number of pages changed."""
-        changed = store(self.conn, snap.docs, self.embedder, progress)
-        if changed:
-            self.embedder.trim()  # a bulk embed leaves hundreds of MB of GPU buffers cached
-        if changed or self.snap is None:
+        """Index what changed in Notion, all the way (words, then meaning). Returns the number of pages changed."""
+        todo, removed = self.refresh_text(snap)
+        if todo:
+            store_vectors(self.conn, todo, self.embedder, progress)
+        if todo or removed or self.vecs is None:
+            self.load_vectors()
+        return len(todo) + removed
+
+    def refresh_text(self, snap):
+        """Phase 1, fast: make new and edited pages findable by their words now. Returns (pages whose meaning is still
+        to be embedded, pages removed). Call embed_pages() for those, then load_vectors()."""
+        todo, removed = store_text(self.conn, snap.docs)
+        if todo or removed or self.snap is None:
             self.pages = {r[0]: (r[1], r[2]) for r in self.conn.execute("SELECT id, title, snippet FROM pages")}
             self.text = {r[0]: r[1:] for r in self.conn.execute("SELECT id, title, crumbs, body, labels FROM fts")}
-            rows = self.conn.execute("SELECT page_id, text, vec FROM chunks").fetchall()
-            self.chunk_page = [r[0] for r in rows]
-            self.chunk_text = [r[1] for r in rows]
-            self.vecs = (np.vstack([np.frombuffer(r[2], np.float32) for r in rows])
-                         if rows else np.zeros((0, DIM), np.float32))
-            self.qvec.cache_clear()
             self.hay = [f"{t}\n{c}\n{b}".lower() for t, c, b, _ in self.text.values()]
             self.df = lru_cache(512)(lambda term: sum(term in h for h in self.hay) or 1)  # pages holding a word
             # every word in the index, for fixing typos: sorted (is there a word starting with this?) and by length (what is close?)
@@ -57,7 +59,21 @@ class Engine:
                 self.by_length[len(w)].append(w)
             self.spelling = lru_cache(1024)(self._spelling)
         self.snap = snap
-        return changed
+        return todo, removed
+
+    def embed_pages(self, todo, progress=None):
+        """Phase 2, slow: embed these pages' text. Call with one page at a time to let searches in between."""
+        store_vectors(self.conn, todo, self.embedder, progress)
+
+    def load_vectors(self):
+        """Put the stored vectors in memory for the meaning search."""
+        rows = self.conn.execute("SELECT page_id, text, vec FROM chunks").fetchall()
+        self.chunk_page = [r[0] for r in rows]
+        self.chunk_text = [r[1] for r in rows]
+        self.vecs = (np.vstack([np.frombuffer(r[2], np.float32) for r in rows])
+                     if rows else np.zeros((0, DIM), np.float32))
+        self.qvec.cache_clear()
+        self.embedder.trim()  # a bulk embed leaves hundreds of MB of GPU buffers cached
 
     # ── retrieval ────────────────────────────────────────────────────────────
 

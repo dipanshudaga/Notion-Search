@@ -88,6 +88,7 @@ def page_id_from_url(url):
 
 BYPASS = "x-ns-bypass"  # marks our own call to Notion's search so the hook lets it through
 CLOUD_WAIT = 1.0  # seconds to wait for Notion's own answer; offline or slow, the local answer goes alone
+CLOUD_BELOW = 4  # ask Notion's servers only when this Mac found fewer results than this
 NO_JS_HEADERS = {"host", "cookie", "origin", "referer", "user-agent", "content-length", "connection", "accept-encoding"}
 
 
@@ -125,15 +126,18 @@ async def answer(ws, paused, engine, pending):
             if query:
                 t = time.perf_counter()
                 current = page_id_from_url(headers.get("Referer") or headers.get("referer"))
-                cloud = asyncio.create_task(cloud_search(ws, pending, req))  # runs while the local search does
                 data = await loop.run_in_executor(EXEC, engine.v3, query, 12, current)
-                extra = 0
-                if (found := await cloud):
+                local_ms, extra = (time.perf_counter() - t) * 1000, 0
+                # Notion's servers are asked only when this Mac found little: the pages they could add are pages whose
+                # text is not here yet, and waiting for them costs a network round trip on every keystroke
+                if len(data["results"]) < CLOUD_BELOW and (found := await cloud_search(ws, pending, req)):
                     mine = {r["id"] for r in data["results"]}
                     data = await loop.run_in_executor(EXEC, engine.merge, data, found)
                     extra = sum(r["id"] not in mine for r in data["results"])
                 body = base64.b64encode(json.dumps(data).encode()).decode()
-                log(f"'{query}': {len(data['results'])} results in {(time.perf_counter() - t) * 1000:.0f} ms"
+                total_ms = (time.perf_counter() - t) * 1000
+                log(f"'{query}': {len(data['results'])} results in {total_ms:.0f} ms"
+                    + (f" ({local_ms:.0f} ms here, the rest waiting for Notion)" if total_ms - local_ms > 50 else "")
                     + (f" (Notion added {extra} not on this Mac yet)" if extra > 0 else ""))
         except Exception as e:
             log(f"search failed, letting Notion answer: {e!r}")
@@ -150,10 +154,26 @@ async def answer(ws, paused, engine, pending):
                                          "responseHeaders": out, "body": body}}))
 
 
+LIVE = {}  # tab id -> its open socket
+
+
+async def drop_dead_sockets():
+    """After sleep a socket can look open and be dead. Ping each one and drop only the dead: dropping a live one
+    loses the search it is answering, and Notion shows loading bars forever."""
+    async def check(ws):
+        try:
+            await asyncio.wait_for(await ws.ping(), 2)
+        except Exception:
+            ws.transport.abort()  # serve_tab ends, and watch_tabs hooks the tab again
+
+    await asyncio.gather(*(check(ws) for ws in list(LIVE.values())))
+
+
 async def serve_tab(tab, engine):
     pending = {}  # id of a command we sent -> future for its reply
     try:
         async with websockets.connect(tab["webSocketDebuggerUrl"], max_size=None) as ws:
+            LIVE[tab["id"]] = ws
             await ws.send(json.dumps({"id": 1, "method": "Fetch.enable", "params": {
                 "patterns": [{"urlPattern": "*api/v3/search*", "requestStage": "Request"}]}}))
             log(f"hooked tab: {tab.get('title', '?')[:40]}")
@@ -165,6 +185,8 @@ async def serve_tab(tab, engine):
                     asyncio.create_task(answer(ws, msg["params"], engine, pending))  # not awaited: it waits on replies read here
     except Exception as e:
         log(f"tab closed: {e!r}"[:120])
+    finally:
+        LIVE.pop(tab["id"], None)
 
 
 def notion_tabs():
@@ -182,11 +204,9 @@ async def watch_tabs(engine):
     while True:
         now, slept = time.time(), time.time() - tick > 5  # a long gap between ticks: the Mac was asleep
         tick = now
-        if slept:  # sockets made before sleep are dead but look open: drop them, and page the model back in
+        if slept:  # sockets made before sleep may be dead but look open: drop those, and page the model back in
             log("woke from sleep")
-            for task in tasks.values():
-                task.cancel()
-            tasks.clear()
+            loop.create_task(drop_dead_sockets())
             loop.run_in_executor(EXEC, engine.warm)
         tasks = {tid: t for tid, t in tasks.items() if not t.done()}
         for tab in await asyncio.to_thread(notion_tabs):
@@ -207,20 +227,29 @@ async def keep_warm(engine):
 # ── Background index sync ────────────────────────────────────────────────────
 
 async def keep_index_fresh(engine):
+    """Words first, meaning second: an edited page is findable by its words about a second after Notion saves it, and by
+    its meaning a few seconds later. The model embeds one page at a time, so a search never waits behind a long job."""
     loop, seen, last = asyncio.get_running_loop(), 0, 0
     wal = NOTION_DB.with_name(NOTION_DB.name + "-wal")
     while True:
-        await asyncio.sleep(5)
+        await asyncio.sleep(1)
         try:
             stamp = max(p.stat().st_mtime for p in (NOTION_DB, wal) if p.exists())
-            if stamp == seen or time.time() - last < 10:
+            if stamp == seen or time.time() - last < 2:
                 continue
             seen, last = stamp, time.time()
             t = time.perf_counter()
             snap = await asyncio.to_thread(snapshot)
-            changed = await loop.run_in_executor(EXEC, engine.refresh, snap)
-            if changed:
-                log(f"index updated: {changed} pages in {(time.perf_counter() - t) * 1000:.0f} ms")
+            todo, removed = await loop.run_in_executor(EXEC, engine.refresh_text, snap)
+            if not (todo or removed):
+                continue
+            words_ms = (time.perf_counter() - t) * 1000
+            for d in todo:
+                await loop.run_in_executor(EXEC, engine.embed_pages, [d])
+            if todo:
+                await loop.run_in_executor(EXEC, engine.load_vectors)
+            log(f"index updated: {len(todo) + removed} pages, findable by words after {words_ms:.0f} ms, "
+                f"by meaning after {(time.perf_counter() - t) * 1000:.0f} ms")
         except Exception as e:
             log(f"sync failed: {e!r}")
 

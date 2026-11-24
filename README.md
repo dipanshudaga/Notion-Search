@@ -49,17 +49,17 @@ Database properties are searched too: a book is found by its author, and a task 
 Long pages are split into chunks of about 1,500 characters, so a match deep inside a page still finds it.
 
 Not searched: dates, people, and the contents of PDFs, images and other files. Notion
-Desktop must have opened a page at least once before it can be indexed. New and edited pages are picked up within
-about 15 seconds.
+Desktop must have opened a page at least once before it can be indexed. New and edited pages can be found by their words
+about 2 seconds after Notion saves them, and by their meaning a few seconds later.
 
 ## Private
 
 Search and indexing run on your Mac, and it works offline. No page text or telemetry leaves it, and the only download
 is the model, once. Notion's database is opened read-only and Notion's app files are never changed.
 
-One thing does go online. To find pages whose text is not on your Mac yet (see the FAQ), the service also sends your
-query to Notion's servers, the same request Notion sends without us. Offline, it skips that step and answers from the
-local index.
+One thing does go online. When your Mac finds fewer than 4 results, the service also sends your query to Notion's
+servers, the same request Notion sends without us, to find pages whose text is not on your Mac yet (see the FAQ).
+With 4 or more local results, or offline, it answers from the local index alone, in about 20 ms.
 
 The service talks to Notion over Chromium's DevTools port (`127.0.0.1:9222`), which any process running as you can
 reach. Do not use this on a Mac that other people control.
@@ -108,7 +108,7 @@ restarts it once with the port enabled. Your pages are safe, because Notion save
 
 Notion saves a page's text on your Mac when you open the page. Until then Notion Desktop lists only its title, so
 Notion Search cannot read it. For those pages it adds Notion's own search hits to the results. Open the page once and
-it joins the local index within about 15 seconds; after that it is answered locally.
+it joins the local index within a few seconds; after that it is answered locally.
 
 ### Does it work on Windows or Linux?
 

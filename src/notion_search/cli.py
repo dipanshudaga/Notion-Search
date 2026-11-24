@@ -1,5 +1,6 @@
 """The `notion-search` command: an arrow-key menu, plus install, update, status, restart, reindex, uninstall and logs."""
 
+import functools
 import importlib.metadata
 import json
 import os
@@ -19,6 +20,7 @@ from pathlib import Path
 from .embedder import DATA, MODEL_DIR
 
 LABEL = "com.notionsearch.service"
+NOTION = "/Applications/Notion.app/Contents/MacOS/Notion"
 PLIST = Path.home() / "Library/LaunchAgents" / f"{LABEL}.plist"
 LOG = Path.home() / "Library/Logs/NotionSearch.log"
 DOMAIN = f"gui/{os.getuid()}"
@@ -61,6 +63,11 @@ def stop_service():
     launchctl("bootout", f"{DOMAIN}/{LABEL}")
 
 
+def disconnected():
+    """True after Disconnect: the service is switched off, and stays off after a login until Connect."""
+    return f'"{LABEL}" => disabled' in launchctl("print-disabled", DOMAIN).stdout
+
+
 def version():
     return importlib.metadata.version("notion-search")
 
@@ -69,8 +76,10 @@ def state_line():
     if not PLIST.exists():
         return f"{D}○ service not installed{N}"
     if service_pid():
-        return f"{G}● running{N} {D}· {page_count()} pages indexed{N}"
-    return f"{Y}○ not running{N} {D}· Restart starts it{N}"
+        return f"{G}● Running{N} {D}· {page_count()} pages indexed{N}"
+    if disconnected():
+        return f"{Y}○ Disconnected{N} {D}· using Notion's own search{N}"
+    return f"{Y}○ Not running{N} {D}· Restart starts it{N}"
 
 
 # ── live checklist (installer) ────────────────────────────────────────────────
@@ -213,10 +222,18 @@ def render_plist(python):
 """
 
 
-def register_service(python):
+def register_service(python, enable=False):
     """Start the service. If the registration is unchanged and loaded, just restart it: re-registering the same
-    LaunchAgent is what makes macOS show its "App Background Activity" notification again."""
+    LaunchAgent is what makes macOS show its "App Background Activity" notification again.
+    After Disconnect it only writes the file: the service stays off until Connect (enable=True)."""
+    off = disconnected() and not enable
+    if not off:
+        launchctl("enable", f"{DOMAIN}/{LABEL}")
     text = render_plist(python)
+    if off:
+        PLIST.parent.mkdir(parents=True, exist_ok=True)
+        PLIST.write_text(text)
+        return True
     loaded = launchctl("print", f"{DOMAIN}/{LABEL}").returncode == 0
     if loaded and PLIST.exists() and PLIST.read_text() == text:
         return launchctl("kickstart", "-k", f"{DOMAIN}/{LABEL}").returncode == 0
@@ -340,13 +357,13 @@ def do_install():
                 return ui.failed()
         else:
             ui.start(i, "Setting up the service that starts when you log in")
-            if not register_service(python):
+            if not register_service(python, enable=not restarting):
                 return ui.failed()
         ui.done(i)
 
     version = importlib.metadata.version("notion-search")
     if updating:
-        out(f"{D}└{N}  {G}{B}Updated to {version}.{N} Notion Search is running.")
+        out(f"{D}└{N}  {G}{B}Updated to {version}.{N} " + ("It stays disconnected until you choose Connect." if disconnected() else "Notion Search is running."))
     else:
         out(f"{D}└{N}  {G}{B}All set.{N} Open Notion and press {B}Cmd+K{N}.")
         out(f"   {D}If Notion was already open, it restarts once so the search can attach.{N}")
@@ -356,9 +373,9 @@ def do_install():
     out()
 
 
-def latest_version():
+def latest_version(timeout=5):
     try:
-        with urllib.request.urlopen("https://pypi.org/pypi/notion-search/json", timeout=5) as r:
+        with urllib.request.urlopen("https://pypi.org/pypi/notion-search/json", timeout=timeout) as r:
             return json.load(r)["info"]["version"]
     except (OSError, ValueError, KeyError):
         return None
@@ -397,9 +414,9 @@ def do_status():
     if not PLIST.exists():
         return
     if not service_pid():
-        return out(f"{RAIL}  {Y}!{N} The search is off, so Notion uses its own. Choose Restart to start it.")
+        return out(f"{RAIL}  {Y}!{N} The search is off, so Notion uses its own. Choose Connect to turn it on.")
     ps = subprocess.run(["ps", "-axo", "command="], capture_output=True, text=True).stdout
-    notion = "/Applications/Notion.app/Contents/MacOS/Notion"
+    notion = NOTION
     if f"{notion} --remote-debugging-port" in ps:
         ok("Notion is linked to Notion Search.")
     elif notion in ps:
@@ -408,13 +425,52 @@ def do_status():
         out(f"{RAIL}  {D}Notion is not open.{N}")
 
 
+def show_status():
+    out(f"{B}Notion Search{N} {D}{version()}{N}")
+    out(state_line())
+    do_status()
+    if notice := update_notice():
+        out(notice)
+
+
+def do_connect():
+    """Turn the service back on after Disconnect."""
+    if not PLIST.exists():
+        return fail("Notion Search is not installed.")
+    if register_service(sys.executable, enable=True):
+        ok("Connected. Notion Search is on again.")
+    else:
+        fail("The service did not start. Run notion-search logs to see why.")
+
+
 def do_restart():
     if not PLIST.exists():
         return fail("Notion Search is not installed.")
+    if disconnected():  # restarting would quietly connect: say so instead
+        return fail("The search is disconnected. Choose Connect to turn it on.")
     if register_service(sys.executable):  # restarts it if loaded, starts it if not
         ok("Restarted")
     else:
         fail("The service did not start. Run notion-search logs to see why.")
+
+
+def do_disconnect():
+    """Stop the service and keep it off, then reopen Notion without the debug port: Notion's own search is back."""
+    if not PLIST.exists():
+        return fail("Notion Search is not installed.")
+    launchctl("disable", f"{DOMAIN}/{LABEL}")  # the LaunchAgent would otherwise start again at the next login
+    stop_service()
+    ok("Disconnected. Notion uses its own search.")
+    ps = subprocess.run(["ps", "-axo", "command="], capture_output=True, text=True).stdout
+    if any(l.startswith(f"{NOTION}") and "--remote-debugging-port" in l for l in ps.splitlines()):
+        subprocess.run(["osascript", "-e", 'tell application "Notion" to quit'], capture_output=True)
+        for _ in range(50):  # wait for it to quit, then open it plainly
+            if NOTION not in subprocess.run(["ps", "-axo", "command="], capture_output=True, text=True).stdout:
+                break
+            time.sleep(0.3)
+        subprocess.run(["open", "-a", "Notion"])
+        ok("Reopened Notion without the search link.")
+    out(f"{RAIL}  {D}Choose Connect to turn the local search back on.{N}")
 
 
 def do_reindex():
@@ -437,7 +493,7 @@ def do_reindex():
         out(f"\n{RAIL}  {Y}Stopped.{N} Nothing was saved. The service is starting and builds the index itself.")
         register_service(sys.executable)
         return out(f"{D}└{N}  This takes about 3 minutes. Until then Notion uses its own search.\n")
-    out(f"{D}└{N}  {G}{B}Done.{N} The service is running again.\n")
+    out(f"{D}└{N}  {G}{B}Done.{N} " + ("It stays disconnected until you choose Connect.\n" if disconnected() else "The service is running again.\n"))
 
 
 def program_remover():
@@ -491,7 +547,11 @@ def confirm_uninstall():
 # ── menu (clack-style) ────────────────────────────────────────────────────────
 
 def header():
-    print(f"\033[H\033[2J\n{D}┌{N}  {B}Notion Search{N} {D}{version()}{N}\n{RAIL}  {state_line()}\n{RAIL}", flush=True)
+    lines = [f"{D}┌{N}  {B}Notion Search{N} {D}{version()}{N}", f"{RAIL}  {state_line()}",
+             f"{RAIL}  {D}Choose {N}{B}Connect{N}{D} to turn the local search back on.{N}" if PLIST.exists() and disconnected() and not service_pid() else
+             f"{RAIL}  {D}Searches pages you have opened at least once.{N}", RAIL]
+    cols = shutil.get_terminal_size().columns
+    print("\033[H\033[2J\n" + "\n".join(clip(line, cols) for line in lines), flush=True)
 
 
 def read_key():
@@ -503,8 +563,18 @@ def read_key():
     return {b"\r": "enter", b"\n": "enter", b"k": "up", b"j": "down", b"\x03": "esc"}.get(ch, "")
 
 
+@functools.lru_cache(1)
+def update_notice():
+    """A line for the bottom of the menu when PyPI has a newer release, else "". A short wait: offline, the menu still opens."""
+    latest, mine = latest_version(timeout=1.5), version()
+    if latest and version_tuple(latest) > version_tuple(mine):
+        return f"{RAIL}  {G}↑ {latest}{N} {D}is available{N}"
+    return ""
+
+
 def pick(title, options):
-    """options: [(label, description)]. Returns the chosen index, or None on esc."""
+    """options: [(label, description)]. Returns the chosen index, or None on esc. Under every menu: the update notice."""
+    notice = update_notice()
     sel, fd = 0, sys.stdin.fileno()
     saved = termios.tcgetattr(fd)
     print("\033[?25l", end="")
@@ -512,15 +582,17 @@ def pick(title, options):
         tty.setcbreak(fd)
         while True:
             header()
-            width = max(10, os.get_terminal_size().columns - 20)  # room for the rail, marker and label column
-            print(f"{C}◆{N}  {title}")
+            cols = os.get_terminal_size().columns
+            lines = [f"{C}◆{N}  {title}"]
             for i, (label, desc) in enumerate(options):
-                desc = desc if len(desc) <= width else desc[:width - 1] + "…"
                 if i == sel:
-                    print(f"{RAIL}  {G}■{N} {B}{label:<11}{N} {D}{desc}{N}")
+                    lines.append(f"{RAIL}  {G}■{N} {B}{label:<12}{N}{D}{desc}{N}")
                 else:
-                    print(f"{RAIL}  {D}□ {label:<11} {desc}{N}")
-            print(f"{D}└{N}  {D}↑↓ move · enter select · esc quit{N}", flush=True)
+                    lines.append(f"{RAIL}  {D}□ {label:<12}{desc}{N}")
+            if notice:
+                lines += [RAIL, notice]
+            lines.append(f"{D}└{N}  {D}↑↓ move · enter select · esc quit{N}")
+            print("\n".join(clip(line, cols) for line in lines), flush=True)
             key = read_key()
             if key == "up":
                 sel = (sel - 1) % len(options)
@@ -549,16 +621,18 @@ def wait_key():
 def menu_options():
     """Only what makes sense right now: a full menu once installed, a short one before (or after a partial removal)."""
     if PLIST.exists():
-        return [("Update", "Get the newest version and refresh the service"),
-                ("Status", "Is it running, and linked to Notion?"),
-                ("Restart", "Restart the background service"),
-                ("Reindex", "Re-read all your Notion pages from scratch"),
+        return [("Update", "Install the newest version"),
+                ("Status", "Is it running and linked?"),
+                *([] if disconnected() else [("Restart", "Restart the service")]),
+                *([("Connect", "Turn the local search back on")] if disconnected() else
+                  [("Disconnect", "Use Notion's own search")] if service_pid() else []),
+                ("Reindex", "Read all pages again"),
                 ("Uninstall", "Remove the service"),
-                ("Quit", "Close this menu")]
+                ("Quit", "")]
     options = [("Install", "Set up the search service and index your Notion")]
     if DATA.exists():  # something is left over from an earlier install
         options.append(("Remove", "Delete the index, the model and the command"))
-    return options + [("Quit", "Close this menu")]
+    return options + [("Quit", "")]
 
 
 def menu():
@@ -580,7 +654,8 @@ def menu():
             return  # the command is gone: nothing left to show a menu for
         else:
             {"Install": do_install, "Update": do_update, "Status": do_status,
-             "Restart": do_restart, "Reindex": do_reindex}[label]()
+             "Restart": do_restart, "Reindex": do_reindex,
+             "Disconnect": do_disconnect, "Connect": do_connect}[label]()
         wait_key()
     print("\033[H\033[2J", end="")
 
@@ -599,7 +674,7 @@ def serve():
 
 COMMANDS = {
     "serve": serve,
-    "install": do_install, "update": do_update, "status": lambda: (out(f"{B}Notion Search{N} {D}{version()}{N}"), out(state_line()), do_status()), "restart": do_restart, "reindex": do_reindex,
+    "install": do_install, "update": do_update, "status": show_status, "restart": do_restart, "reindex": do_reindex, "disconnect": do_disconnect, "connect": do_connect,
     "uninstall": lambda: do_uninstall(keep_data="--keep-data" in sys.argv) if confirm_uninstall() else out("Nothing was removed."),
     "logs": lambda: os.execvp("tail", ["tail", "-f", str(LOG)]),
 }
